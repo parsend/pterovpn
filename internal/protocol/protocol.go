@@ -10,32 +10,50 @@ import (
 
 var magic = []byte{'P', 'T', 'V', 'P', 'N'}
 
+func Magic() []byte { return magic }
+
 const (
 	version = 1
 
 	roleUDP = 1
 	roleTCP = 2
 
-	msgUDP = 1
+	msgUDP  = 1
+	msgPing = 2
+	msgPong = 3
 
 	addrV4 = 4
 	addrV6 = 6
 )
 
+const flagCompression = 1
+
 type Handshake struct {
-	Role      byte
-	ChannelID byte
-	Token     string
+	Role        byte
+	ChannelID   byte
+	Token       string
+	Compression bool
 }
 
-func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) error {
+func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string, compression bool) error {
 	if _, err := w.Write(magic); err != nil {
 		return err
 	}
+	return WriteHandshakeBody(w, role, channelID, token, compression)
+}
+
+func WriteHandshakeBody(w *bufio.Writer, role byte, channelID byte, token string, compression bool) error {
 	if err := w.WriteByte(version); err != nil {
 		return err
 	}
 	if err := w.WriteByte(role); err != nil {
+		return err
+	}
+	flags := byte(0)
+	if compression {
+		flags |= flagCompression
+	}
+	if err := w.WriteByte(flags); err != nil {
 		return err
 	}
 	if len(token) > 4096 {
@@ -65,6 +83,10 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 			return Handshake{}, errors.New("bad magic")
 		}
 	}
+	return ReadHandshakeBody(r)
+}
+
+func ReadHandshakeBody(r *bufio.Reader) (Handshake, error) {
 	ver, err := r.ReadByte()
 	if err != nil {
 		return Handshake{}, err
@@ -76,6 +98,11 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 	if err != nil {
 		return Handshake{}, err
 	}
+	flags, err := r.ReadByte()
+	if err != nil {
+		return Handshake{}, err
+	}
+	compression := (flags & flagCompression) != 0
 	tokLen, err := readU16(r)
 	if err != nil {
 		return Handshake{}, err
@@ -94,7 +121,7 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 			return Handshake{}, err
 		}
 	}
-	return Handshake{Role: role, ChannelID: ch, Token: string(tok)}, nil
+	return Handshake{Role: role, ChannelID: ch, Token: string(tok), Compression: compression}, nil
 }
 
 type TcpConnect struct {
@@ -137,6 +164,7 @@ func ReadTcpConnect(r *bufio.Reader) (TcpConnect, error) {
 }
 
 type UDPFrame struct {
+	MsgType  byte
 	AddrType byte
 	SrcPort  uint16
 	DstIP    net.IP
@@ -156,7 +184,11 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return UDPFrame{}, err
 	}
-	if buf[0] != msgUDP {
+	msgType := buf[0]
+	if msgType == msgPing || msgType == msgPong {
+		return UDPFrame{MsgType: msgType}, nil
+	}
+	if msgType != msgUDP {
 		return UDPFrame{}, errors.New("bad msg")
 	}
 	at := buf[1]
@@ -181,10 +213,19 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	off += 2
 	payload := make([]byte, len(buf)-off)
 	copy(payload, buf[off:])
-	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
+	return UDPFrame{MsgType: msgUDP, AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
 }
 
 func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
+	if f.MsgType == msgPing || f.MsgType == msgPong {
+		if err := writeU32(w, 1); err != nil {
+			return err
+		}
+		if err := w.WriteByte(f.MsgType); err != nil {
+			return err
+		}
+		return w.Flush()
+	}
 	at, ipb, err := normalizeIP(f.DstIP)
 	if err != nil {
 		return err
@@ -214,6 +255,11 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	}
 	return w.Flush()
 }
+
+func MsgUDP() byte   { return msgUDP }
+func MsgPing() byte  { return msgPing }
+func MsgPong() byte  { return msgPong }
+func IsPingPong(b byte) bool { return b == msgPing || b == msgPong }
 
 func RoleUDP() byte { return roleUDP }
 func RoleTCP() byte { return roleTCP }

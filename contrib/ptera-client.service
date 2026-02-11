@@ -1,0 +1,16 @@
+[Unit]
+Description=Ptera VPN client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ptera-client --config /etc/pteravpn/client.conf
+Restart=always
+RestartSec=5
+# TUN and routes require root or CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

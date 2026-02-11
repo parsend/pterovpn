@@ -36,3 +36,10 @@ sudo ./ptera-client \
   --token change-me
 ```
 
+### Конфиг клиента
+
+Файл в порядке поиска: `--config`, `./ptera-client.conf`, `~/.config/pteravpn/client.conf`. 
+
+Ключи: `server`, `ports`, `servers` (резерв через запятую), `token`, `tun`, `tunCIDR`, `mtu`, `keepaliveSec`, `reconnect`, `includeRoutes`, `excludeRoutes`, `quiet`, `obfuscate`, `compression`.
+
+
