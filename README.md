@@ -42,4 +42,24 @@ sudo ./ptera-client \
 
 Ключи: `server`, `ports`, `servers` (резерв через запятую), `token`, `tun`, `tunCIDR`, `mtu`, `keepaliveSec`, `reconnect`, `includeRoutes`, `excludeRoutes`, `quiet`, `obfuscate`, `compression`.
 
+split tunnel — в туннель только указанные сети (по умолчанию все = default):
+
+```bash
+sudo ./ptera-client --server 1.2.3.4:25565 --token x \
+  --routes 0.0.0.0/0,::/0
+```
+
+только одна сеть:
+
+```bash
+sudo ./ptera-client --server 1.2.3.4:25565 --token x \
+  --routes 1.2.3.0/24
+```
+
+exclude — не пускать в туннель локальные подсети (идёт через обычный шлюз):
+
+```bash
+sudo ./ptera-client --server 1.2.3.4:25565 --token x \
+  --exclude 192.168.0.0/16,10.0.0.0/8
+```
 

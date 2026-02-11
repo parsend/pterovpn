@@ -151,6 +151,89 @@ func cidrInCidr(inc, exc *net.IPNet) bool {
 	return exc.Contains(inc.IP) && incOnes >= excOnes
 }
 
+func ParseCIDRs(s string) ([]*net.IPNet, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var out []*net.IPNet
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(p)
+		if err != nil {
+			return nil, fmt.Errorf("bad cidr %q: %w", p, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
+	for _, n := range cidrs {
+		if n.IP.To4() == nil {
+			continue
+		}
+		args := []string{"ip", "route", "add", n.String()}
+		if dr.Gateway != "" {
+			args = append(args, "via", dr.Gateway, "dev", dr.Dev)
+		} else {
+			args = append(args, "dev", dr.Dev)
+		}
+		if err := run(args...); err != nil {
+			return fmt.Errorf("exclude %s: %w", n.String(), err)
+		}
+	}
+	return nil
+}
+
+func DelExcludeRoutes(cidrs []*net.IPNet) {
+	for _, n := range cidrs {
+		if n.IP.To4() == nil {
+			continue
+		}
+		_ = execIgnore("ip", "route", "del", n.String())
+	}
+}
+
+func AddRoutesViaTun(tun string, cidrs []*net.IPNet, metric int) error {
+	metricStr := fmt.Sprintf("%d", metric)
+	if len(cidrs) == 0 {
+		return AddDefaultViaTun(tun, metric)
+	}
+	for _, n := range cidrs {
+		if n.IP.To4() != nil {
+			cmd := exec.Command("ip", "route", "add", n.String(), "dev", tun, "metric", metricStr)
+			out, err := cmd.CombinedOutput()
+			if err != nil && !bytes.Contains(out, []byte("File exists")) {
+				return fmt.Errorf("route %s: %w: %s", n.String(), err, strings.TrimSpace(string(out)))
+			}
+		} else {
+			cmd := exec.Command("ip", "-6", "route", "add", n.String(), "dev", tun, "metric", metricStr)
+			out, err := cmd.CombinedOutput()
+			if err != nil && !bytes.Contains(out, []byte("File exists")) {
+				return fmt.Errorf("route %s: %w: %s", n.String(), err, strings.TrimSpace(string(out)))
+			}
+		}
+	}
+	return nil
+}
+
+func DelRoutesViaTun(tun string, cidrs []*net.IPNet) {
+	if len(cidrs) == 0 {
+		DelDefaultViaTun(tun)
+		return
+	}
+	for _, n := range cidrs {
+		if n.IP.To4() != nil {
+			_ = execIgnore("ip", "route", "del", n.String(), "dev", tun)
+		} else {
+			_ = execIgnore("ip", "-6", "route", "del", n.String(), "dev", tun)
+		}
+	}
+}
+
 func ResolveHost(host string) (net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return ip, nil

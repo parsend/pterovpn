@@ -35,6 +35,8 @@ func run() error {
 		tunName      = flag.String("tun", "ptera0", "tun name")
 		tunCIDR      = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
 		mtu          = flag.Int("mtu", 1420, "mtu")
+		routes       = flag.String("routes", "", "cidrs to route via tunnel (default=all). e.g. 0.0.0.0/0,::/0")
+		exclude      = flag.String("exclude", "", "cidrs to exclude from tunnel (use default gw). e.g. 192.168.0.0/16,10.0.0.0/8")
 		keepaliveSec = flag.Int("keepalive", 30, "udp keepalive interval (seconds)")
 		reconnect    = flag.Bool("reconnect", false, "reconnect on failure")
 		quiet        = flag.Bool("quiet", false, "minimal output, only tunnel up and errors")
@@ -47,7 +49,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	mergeFlags(&cfg, server, ports, token, tunName, tunCIDR, mtu, keepaliveSec, reconnect, quiet, obfuscate, compression)
+	mergeFlags(&cfg, server, ports, token, tunName, tunCIDR, mtu, routes, exclude, keepaliveSec, reconnect, quiet, obfuscate, compression)
 
 	if cfg.Server == "" && cfg.Servers == "" {
 		return errors.New("need server or servers in config or --server")
@@ -120,7 +122,7 @@ func run() error {
 	}
 }
 
-func mergeFlags(cfg *clientconfig.Config, server, ports, token, tunName, tunCIDR *string, mtu, keepaliveSec *int, reconnect, quiet, obfuscate, compression *bool) {
+func mergeFlags(cfg *clientconfig.Config, server, ports, token, tunName, tunCIDR *string, mtu *int, routes, exclude *string, keepaliveSec *int, reconnect, quiet, obfuscate, compression *bool) {
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "server":
@@ -141,6 +143,14 @@ func mergeFlags(cfg *clientconfig.Config, server, ports, token, tunName, tunCIDR
 			if *mtu > 0 {
 				cfg.MTU = *mtu
 			}
+		case "routes":
+			if *routes != "" {
+				cfg.IncludeRoutes = *routes
+			}
+		case "exclude":
+			if *exclude != "" {
+				cfg.ExcludeRoutes = *exclude
+			}
 		case "keepalive":
 			if *keepaliveSec > 0 {
 				cfg.KeepaliveSec = *keepaliveSec
@@ -155,6 +165,24 @@ func mergeFlags(cfg *clientconfig.Config, server, ports, token, tunName, tunCIDR
 			cfg.Compression = *compression
 		}
 	})
+}
+
+func parseRouteConfig(includeRoutes, excludeRoutes string) (routeCIDRs, excludeCIDRs []*net.IPNet, err error) {
+	excludeCIDRs, err = netcfg.ParseCIDRs(excludeRoutes)
+	if err != nil {
+		return nil, nil, err
+	}
+	if includeRoutes != "" {
+		routes, err := netcfg.RoutesToAdd(includeRoutes, excludeRoutes)
+		if err != nil {
+			return nil, nil, err
+		}
+		routeCIDRs, err = netcfg.ParseCIDRs(strings.Join(routes, ","))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return routeCIDRs, excludeCIDRs, nil
 }
 
 func splitServers(s string) []string {
@@ -201,6 +229,14 @@ func runSession(ctx context.Context, opts sessionOpts) error {
 	}
 	defer netcfg.DelBypass(sip)
 
+	routeCIDRs, excludeCIDRs, err := parseRouteConfig(opts.includeRoutes, opts.excludeRoutes)
+	if err != nil {
+		return err
+	}
+	if err := netcfg.AddExcludeRoutes(dr, excludeCIDRs); err != nil {
+		return err
+	}
+
 	f, name, err := tun.Create(opts.tunName)
 	if err != nil {
 		return err
@@ -209,12 +245,9 @@ func runSession(ctx context.Context, opts sessionOpts) error {
 	if err := tun.Configure(name, opts.tunCIDR, opts.mtu); err != nil {
 		return err
 	}
-	var addedRoutes []string
 	defer func() {
-		for _, cidr := range addedRoutes {
-			netcfg.DelRouteViaTun(name, cidr)
-		}
-		netcfg.DelDefaultViaTun(name)
+		netcfg.DelRoutesViaTun(name, routeCIDRs)
+		netcfg.DelExcludeRoutes(excludeCIDRs)
 		tun.Teardown(name, opts.tunCIDR)
 	}()
 
@@ -239,23 +272,10 @@ func runSession(ctx context.Context, opts sessionOpts) error {
 		if opts.quiet {
 			fmt.Fprintln(os.Stderr, "Tunnel up")
 		} else {
-			log.Printf("Tunnel ready, switching default route to %s", name)
+			log.Printf("Tunnel ready, switching routes to %s", name)
 		}
-		if opts.includeRoutes != "" {
-			routes, err := netcfg.RoutesToAdd(opts.includeRoutes, opts.excludeRoutes)
-			if err != nil {
-				return err
-			}
-			for _, cidr := range routes {
-				if err := netcfg.AddRouteViaTun(name, cidr, 5); err != nil {
-					return err
-				}
-				addedRoutes = append(addedRoutes, cidr)
-			}
-		} else {
-			if err := netcfg.AddDefaultViaTun(name, 5); err != nil {
-				return err
-			}
+		if err := netcfg.AddRoutesViaTun(name, routeCIDRs, 5); err != nil {
+			return err
 		}
 	case err := <-errCh:
 		return err
