@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+
+*.log
+
+server/target/
+server/bin/
+*.class
+
+dist/
+build/
+
+config.properties
+

@@ -1,0 +1,48 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: build server
+        run: mvn -q -f server/pom.xml package
+
+      - name: build client
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-amd64 ./cmd/ptera-client
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-arm64 ./cmd/ptera-client
+
+      - name: collect artifacts
+        run: |
+          cp server/target/ptera-vpn-server.jar dist/ptera-vpn-server.jar
+          cp config.properties.example dist/config.properties.example
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ptera-vpn-server.jar
+            dist/ptera-client-linux-amd64
+            dist/ptera-client-linux-arm64
+            dist/config.properties.example
+
