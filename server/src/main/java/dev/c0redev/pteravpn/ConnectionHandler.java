@@ -8,8 +8,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.logging.Logger;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.GZIPOutputStream;
 
 final class ConnectionHandler implements Runnable {
   private static final Logger log = Log.logger(ConnectionHandler.class);
@@ -30,30 +28,8 @@ final class ConnectionHandler implements Runnable {
       InputStream in = new BufferedInputStream(s.getInputStream());
       OutputStream out = s.getOutputStream();
 
-      if (cfg.obfuscate()) {
-        byte[] magic = new byte[Protocol.MAGIC.length];
-        int n = 0;
-        while (n < magic.length) {
-          int r = in.read(magic, n, magic.length - n);
-          if (r <= 0) throw new IOException("short read magic");
-          n += r;
-        }
-        for (int i = 0; i < Protocol.MAGIC.length; i++) {
-          if (magic[i] != Protocol.MAGIC[i]) throw new IOException("bad magic");
-        }
-        XorStream xor = new XorStream(XorStream.keyFromToken(cfg.token()));
-        in = new BufferedInputStream(xor.wrapInput(in));
-        out = xor.wrapOutput(out);
-      }
-
-      Protocol.Handshake hs = cfg.obfuscate()
-          ? Protocol.readHandshakeBody(in)
-          : Protocol.readHandshake(in);
+      Protocol.Handshake hs = Protocol.readHandshake(in);
       if (!cfg.token().equals(hs.token())) throw new IOException("bad token");
-      if (hs.compression()) {
-        in = new BufferedInputStream(new GZIPInputStream(in));
-        out = new GZIPOutputStream(out);
-      }
       log.info("Accepted role=" + hs.role() + " from " + s.getRemoteSocketAddress());
 
       if (hs.role() == Protocol.ROLE_UDP) {
@@ -77,11 +53,6 @@ final class ConnectionHandler implements Runnable {
     udp.setWriter(channelId, out);
     while (true) {
       Protocol.UdpFrame f = Protocol.readUdpFrame(in);
-      if (f.msgType() == Protocol.MSG_PING) {
-        Protocol.writeUdpFrame(out, new Protocol.UdpFrame(Protocol.MSG_PONG, (byte) 0, 0, null, 0, new byte[0]));
-        continue;
-      }
-      if (f.msgType() == Protocol.MSG_PONG) continue;
       udp.onFrame(channelId, f);
     }
   }

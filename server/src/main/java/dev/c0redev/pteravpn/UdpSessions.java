@@ -82,7 +82,7 @@ final class UdpSessions implements AutoCloseable {
           buf.get(payload);
           UdpChannelWriter w = writers[s.channelId];
           if (w == null) continue;
-          w.send(new Protocol.UdpFrame(Protocol.MSG_UDP, s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+          w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
         }
         selector.selectedKeys().clear();
       } catch (IOException e) {

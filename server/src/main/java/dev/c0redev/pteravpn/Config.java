@@ -12,13 +12,11 @@ final class Config {
   private final List<Integer> listenPorts;
   private final String token;
   private final int udpChannels;
-  private final boolean obfuscate;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, boolean obfuscate) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
-    this.obfuscate = obfuscate;
   }
 
   List<Integer> listenPorts() {
@@ -31,10 +29,6 @@ final class Config {
 
   int udpChannels() {
     return udpChannels;
-  }
-
-  boolean obfuscate() {
-    return obfuscate;
   }
 
   static Config load(Path configPath) throws IOException {
@@ -55,15 +49,7 @@ final class Config {
     int udpChannels = parseInt(p.getProperty("udpChannels"), 4);
     if (udpChannels != 4) throw new IOException("udpChannels must be 4");
 
-    boolean obfuscate = parseBool(p.getProperty("obfuscate"), false);
-
-    return new Config(ports, token, udpChannels, obfuscate);
-  }
-
-  private static boolean parseBool(String s, boolean def) {
-    if (s == null || s.isBlank()) return def;
-    String v = s.trim().toLowerCase();
-    return v.equals("1") || v.equals("true") || v.equals("yes");
+    return new Config(ports, token, udpChannels);
   }
 
   private static String firstNonEmpty(String a, String b) {
