@@ -5,7 +5,7 @@
   <groupId>dev.c0redev</groupId>
   <artifactId>ptera-vpn-server</artifactId>
   <version>0.1.0</version>
-  <name>ptera-vpn-server</name>
+  <name>server</name>
 
   <properties>
     <maven.compiler.source>17</maven.compiler.source>

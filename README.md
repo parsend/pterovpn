@@ -1,5 +1,7 @@
 # ptera vpn
 
+License: MIT © c0redev (parsend)
+
 ## server (java)
 
 `config.properties` рядом с jar.
