@@ -99,7 +99,7 @@ func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 		if n.IP.To4() == nil {
 			continue
 		}
-		args := []string{"ip", "route", "add", n.String()}
+		args := []string{"ip", "route", "replace", n.String()}
 		if dr.Gateway != "" {
 			args = append(args, "via", dr.Gateway, "dev", dr.Dev)
 		} else {
@@ -211,7 +211,7 @@ func run(args ...string) error {
 
 func execIgnore(args ...string) error {
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 	return cmd.Run()
 }
