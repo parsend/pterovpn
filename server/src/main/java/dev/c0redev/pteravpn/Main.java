@@ -24,14 +24,15 @@ public final class Main {
     log.info("Ports: " + cfg.listenPorts());
 
     ExecutorService pool = Executors.newCachedThreadPool();
-    try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {
+    try (UdpSessions udp = new UdpSessions("udp", cfg.udpChannels());
+         UdpSessions quic = new UdpSessions("quic", cfg.quicChannels())) {
       List<ServerSocket> sockets = new ArrayList<>();
       for (int port : cfg.listenPorts()) {
         ServerSocket ss = new ServerSocket();
         ss.setReuseAddress(true);
         ss.bind(new InetSocketAddress(port));
         sockets.add(ss);
-        pool.submit(() -> acceptLoop(ss, cfg, udp, pool));
+        pool.submit(() -> acceptLoop(ss, cfg, udp, quic, pool));
       }
 
       Thread.currentThread().join();
@@ -40,13 +41,13 @@ public final class Main {
     }
   }
 
-  private static void acceptLoop(ServerSocket ss, Config cfg, UdpSessions udp, ExecutorService pool) {
+  private static void acceptLoop(ServerSocket ss, Config cfg, UdpSessions udp, UdpSessions quic, ExecutorService pool) {
     while (true) {
       try {
         Socket s = ss.accept();
         s.setTcpNoDelay(true);
         s.setKeepAlive(true);
-        pool.submit(new ConnectionHandler(s, cfg, udp));
+        pool.submit(new ConnectionHandler(s, cfg, udp, quic));
       } catch (IOException e) {
         log.warning("accept error: " + e.getMessage());
       }

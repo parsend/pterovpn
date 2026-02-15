@@ -1,3 +1,4 @@
-listenPorts=nigga
-token=suck me pls
+listenPorts=25565
+token=change-me
 udpChannels=4
+quicChannels=4

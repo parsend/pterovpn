@@ -13,8 +13,9 @@ var magic = []byte{'P', 'T', 'V', 'P', 'N'}
 const (
 	version = 1
 
-	roleUDP = 1
-	roleTCP = 2
+	roleUDP  = 1
+	roleTCP  = 2
+	roleQUIC = 3
 
 	msgUDP = 1
 
@@ -47,7 +48,7 @@ func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) er
 	if _, err := w.WriteString(token); err != nil {
 		return err
 	}
-	if role == roleUDP {
+	if role == roleUDP || role == roleQUIC {
 		if err := w.WriteByte(channelID); err != nil {
 			return err
 		}
@@ -88,7 +89,7 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 		return Handshake{}, err
 	}
 	var ch byte
-	if role == roleUDP {
+	if role == roleUDP || role == roleQUIC {
 		ch, err = r.ReadByte()
 		if err != nil {
 			return Handshake{}, err
@@ -215,8 +216,9 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	return w.Flush()
 }
 
-func RoleUDP() byte { return roleUDP }
-func RoleTCP() byte { return roleTCP }
+func RoleUDP() byte  { return roleUDP }
+func RoleTCP() byte  { return roleTCP }
+func RoleQUIC() byte { return roleQUIC }
 
 func normalizeIP(ip net.IP) (byte, []byte, error) {
 	if v4 := ip.To4(); v4 != nil {
