@@ -12,13 +12,11 @@ final class Config {
   private final List<Integer> listenPorts;
   private final String token;
   private final int udpChannels;
-  private final int quicChannels;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, int quicChannels) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
-    this.quicChannels = quicChannels;
   }
 
   List<Integer> listenPorts() {
@@ -31,10 +29,6 @@ final class Config {
 
   int udpChannels() {
     return udpChannels;
-  }
-
-  int quicChannels() {
-    return quicChannels;
   }
 
   static Config load(Path configPath) throws IOException {
@@ -54,10 +48,8 @@ final class Config {
 
     int udpChannels = parseInt(p.getProperty("udpChannels"), 4);
     if (udpChannels != 4) throw new IOException("udpChannels must be 4");
-    int quicChannels = parseInt(p.getProperty("quicChannels"), 4);
-    if (quicChannels != 4) throw new IOException("quicChannels must be 4");
 
-    return new Config(ports, token, udpChannels, quicChannels);
+    return new Config(ports, token, udpChannels);
   }
 
   private static String firstNonEmpty(String a, String b) {

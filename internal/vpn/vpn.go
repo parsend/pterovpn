@@ -35,16 +35,11 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	log.Printf("vpn: starting, servers=%v", opt.ServerAddrs)
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, protocol.RoleUDP(), "udp")
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4)
 	if err != nil {
 		return err
 	}
 	defer udpMux.Close()
-	quicMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, protocol.RoleQUIC(), "quic")
-	if err != nil {
-		return err
-	}
-	defer quicMux.Close()
 
 	dev, err := fdbased.Open(strconv.Itoa(opt.TunFD), uint32(opt.MTU), 0)
 	if err != nil {
@@ -53,9 +48,8 @@ func Run(ctx context.Context, opt Options) error {
 	defer dev.Close()
 
 	h := &handler{
-		opt:     opt,
-		udpMux:  udpMux,
-		quicMux: quicMux,
+		opt:    opt,
+		udpMux: udpMux,
 	}
 
 	if _, err := core.CreateStack(&core.Config{
@@ -84,28 +78,24 @@ type udpAssoc struct {
 }
 
 type udpMux struct {
-	name  string
-	role  byte
 	chans []*udpChan
 	mu    sync.RWMutex
 	assoc map[udpAssocKey]*udpAssoc
 }
 
-func newUDPMux(addrs []string, token string, n int, role byte, name string) (*udpMux, error) {
+func newUDPMux(addrs []string, token string, n int) (*udpMux, error) {
 	m := &udpMux{
-		name:  name,
-		role:  role,
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, role, name)
+		c, err := newUDPChan(byte(i), addrs, token, m.dispatch)
 		if err != nil {
-			log.Printf("vpn: %s channel %d failed: %v", name, i, err)
+			log.Printf("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
 			return nil, err
 		}
-		log.Printf("vpn: %s channel %d connected", name, i)
+		log.Printf("vpn: udp channel %d connected", i)
 		m.chans[i] = c
 	}
 	return m, nil
@@ -150,16 +140,15 @@ func (m *udpMux) dispatch(f protocol.UDPFrame) {
 	a := m.assoc[k]
 	m.mu.RUnlock()
 	if a == nil {
-		log.Printf("vpn: %s dispatch no assoc for %d->%s:%d", m.name, f.SrcPort, f.DstIP.String(), f.DstPort)
+		log.Printf("vpn: udp dispatch no assoc for %d->%s:%d", f.SrcPort, f.DstIP.String(), f.DstPort)
 		return
 	}
 	if _, err := a.c.WriteTo(f.Payload, nil); err != nil {
-		log.Printf("vpn: %s dispatch write error: %v", m.name, err)
+		log.Printf("vpn: udp dispatch write error: %v", err)
 	}
 }
 
 type udpChan struct {
-	name string
 	conn net.Conn
 	r    *bufio.Reader
 	w    *bufio.Writer
@@ -168,7 +157,7 @@ type udpChan struct {
 	cb   func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), role byte, name string) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame)) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -179,19 +168,18 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			continue
 		}
 		uc := &udpChan{
-			name: name,
 			conn: c,
 			r:    bufio.NewReaderSize(c, 64*1024),
 			w:    bufio.NewWriterSize(c, 64*1024),
 			stop: make(chan struct{}),
 			cb:   cb,
 		}
-		if err := protocol.WriteHandshake(uc.w, role, id, token); err != nil {
+		if err := protocol.WriteHandshake(uc.w, protocol.RoleUDP(), id, token); err != nil {
 			_ = c.Close()
 			last = err
 			continue
 		}
-		log.Printf("vpn: %s channel %d uses server %s", name, id, a)
+		log.Printf("vpn: udp channel %d uses server %s", id, a)
 		go uc.readLoop()
 		return uc, nil
 	}
@@ -221,7 +209,7 @@ func (c *udpChan) readLoop() {
 		}
 		f, err := protocol.ReadUDPFrame(c.r)
 		if err != nil {
-			log.Printf("vpn: %s channel read failed: %v", c.name, err)
+			log.Printf("vpn: udp channel read failed: %v", err)
 			return
 		}
 		c.cb(f)
@@ -229,9 +217,8 @@ func (c *udpChan) readLoop() {
 }
 
 type handler struct {
-	opt     Options
-	udpMux  *udpMux
-	quicMux *udpMux
+	opt    Options
+	udpMux *udpMux
 }
 
 func (h *handler) HandleTCP(c adapter.TCPConn) {
@@ -249,28 +236,24 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	srcPort := uint16(id.RemotePort)
 	dstIP := tcpipToIP(id.LocalAddress)
 	dstPort := uint16(id.LocalPort)
-	targetMux := h.udpMux
-	if dstPort == 443 {
-		targetMux = h.quicMux
-	}
-	log.Printf("vpn: %s assoc %d -> %s:%d", targetMux.name, srcPort, dstIP.String(), dstPort)
+	log.Printf("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
 
 	k := udpAssocKey{SrcPort: srcPort, DstIP: dstIP.String(), DstPort: dstPort}
 	a := &udpAssoc{c: uc}
-	targetMux.register(k, a)
-	defer targetMux.unregister(k)
+	h.udpMux.register(k, a)
+	defer h.udpMux.unregister(k)
 
 	buf := make([]byte, 64*1024)
 	for {
 		n, _, err := uc.ReadFrom(buf)
 		if err != nil {
-			log.Printf("vpn: %s read failed %d->%s:%d: %v", targetMux.name, srcPort, dstIP.String(), dstPort, err)
+			log.Printf("vpn: udp read failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
 		p := make([]byte, n)
 		copy(p, buf[:n])
-		if err := targetMux.send(k, p); err != nil {
-			log.Printf("vpn: %s send failed %d->%s:%d: %v", targetMux.name, srcPort, dstIP.String(), dstPort, err)
+		if err := h.udpMux.send(k, p); err != nil {
+			log.Printf("vpn: udp send failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
 	}

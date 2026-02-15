@@ -15,13 +15,11 @@ final class ConnectionHandler implements Runnable {
   private final Socket sock;
   private final Config cfg;
   private final UdpSessions udp;
-  private final UdpSessions quic;
 
-  ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, UdpSessions quic) {
+  ConnectionHandler(Socket sock, Config cfg, UdpSessions udp) {
     this.sock = sock;
     this.cfg = cfg;
     this.udp = udp;
-    this.quic = quic;
   }
 
   @Override
@@ -38,10 +36,6 @@ final class ConnectionHandler implements Runnable {
         handleUdp(hs.channelId(), in, out);
         return;
       }
-      if (hs.role() == Protocol.ROLE_QUIC) {
-        handleQuic(hs.channelId(), in, out);
-        return;
-      }
       if (hs.role() == Protocol.ROLE_TCP) {
         handleTcp(in, out);
         return;
@@ -50,16 +44,6 @@ final class ConnectionHandler implements Runnable {
     } catch (EOFException ignored) {
     } catch (IOException e) {
       log.fine("conn closed: " + e.getMessage());
-    }
-  }
-
-  private void handleQuic(int channelId, InputStream in, OutputStream out) throws IOException {
-    if (channelId < 0 || channelId >= cfg.quicChannels()) throw new IOException("bad quic channel");
-    log.info("QUIC channel " + channelId + " registered from " + sock.getRemoteSocketAddress());
-    quic.setWriter(channelId, out);
-    while (true) {
-      Protocol.UdpFrame f = Protocol.readUdpFrame(in);
-      quic.onFrame(channelId, f);
     }
   }
 

@@ -18,25 +18,23 @@ import java.util.logging.Logger;
 
 final class UdpSessions implements AutoCloseable {
   private final Logger log = Log.logger(UdpSessions.class);
-  private final String kind;
   private final Map<Key, Session> sessions = new ConcurrentHashMap<>();
   private final UdpChannelWriter[] writers;
   private final Selector selector;
   private final Thread selectorThread;
   private final AtomicBoolean closed = new AtomicBoolean(false);
 
-  UdpSessions(String kind, int channels) throws IOException {
-    this.kind = kind;
+  UdpSessions(int channels) throws IOException {
     this.writers = new UdpChannelWriter[channels];
     this.selector = Selector.open();
-    this.selectorThread = new Thread(this::selectLoop, kind + "-selector");
+    this.selectorThread = new Thread(this::selectLoop, "udp-selector");
     this.selectorThread.setDaemon(true);
     this.selectorThread.start();
   }
 
   void setWriter(int channelId, OutputStream out) {
     if (channelId < 0 || channelId >= writers.length) throw new IllegalArgumentException("bad channel");
-    writers[channelId] = new UdpChannelWriter(channelId, out, kind);
+    writers[channelId] = new UdpChannelWriter(channelId, out);
   }
 
   void onFrame(int channelId, Protocol.UdpFrame f) throws IOException {
@@ -88,7 +86,7 @@ final class UdpSessions implements AutoCloseable {
         }
         selector.selectedKeys().clear();
       } catch (IOException e) {
-        log.warning(kind + " selector error: " + e.getMessage());
+        log.warning("udp selector error: " + e.getMessage());
       }
     }
   }
@@ -134,14 +132,16 @@ final class UdpSessions implements AutoCloseable {
   }
 
   private static final class UdpChannelWriter implements AutoCloseable {
+    private final int channelId;
     private final OutputStream out;
     private final LinkedBlockingQueue<Protocol.UdpFrame> q = new LinkedBlockingQueue<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Thread t;
 
-    UdpChannelWriter(int channelId, OutputStream out, String kind) {
+    UdpChannelWriter(int channelId, OutputStream out) {
+      this.channelId = channelId;
       this.out = out;
-      this.t = new Thread(this::loop, kind + "-writer-" + channelId);
+      this.t = new Thread(this::loop, "udp-writer-" + channelId);
       this.t.setDaemon(true);
       this.t.start();
     }

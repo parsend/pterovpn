@@ -10,7 +10,6 @@ License: MIT © c0redev (parsend)
 listenPorts=25565
 token=change-me
 udpChannels=4
-quicChannels=4
 ```
 
 запуск:

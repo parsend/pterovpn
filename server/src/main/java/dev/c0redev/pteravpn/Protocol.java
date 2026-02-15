@@ -15,7 +15,6 @@ final class Protocol {
 
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
-  static final byte ROLE_QUIC = 3;
 
   static final byte MSG_UDP = 1;
 
@@ -29,7 +28,7 @@ final class Protocol {
     byte[] tok = token.getBytes(StandardCharsets.UTF_8);
     writeU16(out, tok.length);
     out.write(tok);
-    if (role == ROLE_UDP || role == ROLE_QUIC) out.write(channelId & 0xff);
+    if (role == ROLE_UDP) out.write(channelId & 0xff);
     out.flush();
   }
 
@@ -45,7 +44,7 @@ final class Protocol {
     if (tokenLen < 0 || tokenLen > 4096) throw new IOException("bad token len");
     String token = new String(readN(in, tokenLen), StandardCharsets.UTF_8);
     int channelId = -1;
-    if (role == ROLE_UDP || role == ROLE_QUIC) channelId = readU8(in);
+    if (role == ROLE_UDP) channelId = readU8(in);
     return new Handshake(role, channelId, token);
   }
 
