@@ -239,9 +239,16 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	log.Printf("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
 
 	k := udpAssocKey{SrcPort: srcPort, DstIP: dstIP.String(), DstPort: dstPort}
+	kAlt := udpAssocKey{SrcPort: dstPort, DstIP: dstIP.String(), DstPort: srcPort}
 	a := &udpAssoc{c: uc}
 	h.udpMux.register(k, a)
+	if kAlt != k {
+		h.udpMux.register(kAlt, a)
+	}
 	defer h.udpMux.unregister(k)
+	if kAlt != k {
+		defer h.udpMux.unregister(kAlt)
+	}
 
 	buf := make([]byte, 64*1024)
 	for {
