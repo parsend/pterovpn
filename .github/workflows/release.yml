@@ -23,6 +23,11 @@ jobs:
         with:
           go-version: "1.23.x"
 
+      - name: test
+        run: |
+          go test ./...
+          mvn -q -f server/pom.xml test
+
       - name: build server
         run: mvn -q -f server/pom.xml package
 

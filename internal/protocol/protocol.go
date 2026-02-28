@@ -2,9 +2,11 @@ package protocol
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
+	"math/big"
 	"net"
 )
 
@@ -20,6 +22,7 @@ const (
 
 	addrV4 = 4
 	addrV6 = 6
+	maxPad  = 32
 )
 
 type Handshake struct {
@@ -149,7 +152,7 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	if err != nil {
 		return UDPFrame{}, err
 	}
-	if flen < 1 || flen > (64*1024+64) {
+	if flen < 2 || flen > (64*1024+64) {
 		return UDPFrame{}, errors.New("bad frame len")
 	}
 	buf := make([]byte, flen)
@@ -179,8 +182,13 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	off += ipLen
 	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
 	off += 2
-	payload := make([]byte, len(buf)-off)
-	copy(payload, buf[off:])
+	padLen := int(buf[len(buf)-1]) % (maxPad + 1)
+	payEnd := len(buf) - 1 - padLen
+	if payEnd < off {
+		payEnd = off
+	}
+	payload := make([]byte, payEnd-off)
+	copy(payload, buf[off:payEnd])
 	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
 }
 
@@ -189,8 +197,9 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	if err != nil {
 		return err
 	}
+	padLen := randPadLen()
 	ipLen := len(ipb)
-	flen := 1 + 1 + 2 + ipLen + 2 + len(f.Payload)
+	flen := 1 + 1 + 2 + ipLen + 2 + len(f.Payload) + padLen + 1
 	if err := writeU32(w, uint32(flen)); err != nil {
 		return err
 	}
@@ -212,7 +221,20 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	if _, err := w.Write(f.Payload); err != nil {
 		return err
 	}
+	pad := make([]byte, padLen)
+	_, _ = rand.Read(pad)
+	if _, err := w.Write(pad); err != nil {
+		return err
+	}
+	if err := w.WriteByte(byte(padLen)); err != nil {
+		return err
+	}
 	return w.Flush()
+}
+
+func randPadLen() int {
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(maxPad+1)))
+	return int(n.Int64())
 }
 
 func RoleUDP() byte { return roleUDP }

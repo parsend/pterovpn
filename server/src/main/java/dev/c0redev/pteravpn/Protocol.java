@@ -5,56 +5,28 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 
 final class Protocol {
+  static final byte[] MAGIC = "PTVPN".getBytes(StandardCharsets.UTF_8);
   static final byte VERSION = 1;
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
-  static final byte TYPE_HANDSHAKE = 0;
-  static final byte TYPE_TCP_CONNECT = 1;
-  static final byte TYPE_UDP_FRAME = 2;
+  static final byte MSG_UDP = 1;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
   static final int MAGIC_LEN = 5;
   static final int MAX_TOKEN = 4096;
   static final int MAX_FRAME = 64 * 1024 + 64;
+  static final int MAX_PAD = 32;
 
-  static byte[] magicFromToken(String token) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      md.update("ptevpn:".getBytes(StandardCharsets.UTF_8));
-      md.update(token.getBytes(StandardCharsets.UTF_8));
-      byte[] h = md.digest();
-      byte[] out = new byte[MAGIC_LEN];
-      System.arraycopy(h, 0, out, 0, MAGIC_LEN);
-      return out;
-    } catch (NoSuchAlgorithmException e) {
-      throw new RuntimeException(e);
-    }
-  }
-
-  static Handshake readMessage(InputStream in, byte[] expectedMagic) throws IOException {
+  static Handshake readHandshake(InputStream in) throws IOException {
     byte[] got = readN(in, MAGIC_LEN);
     for (int i = 0; i < MAGIC_LEN; i++) {
-      if (got[i] != expectedMagic[i]) throw new IOException("bad magic");
+      if (got[i] != MAGIC[i]) throw new IOException("bad magic");
     }
-    int t = readU8(in);
-    if (t != TYPE_HANDSHAKE) throw new IOException("expected handshake");
     return readHandshakeBody(in);
-  }
-
-  static Object readMessageAfterHandshake(InputStream in) throws IOException {
-    int t = readU8(in);
-    return switch (t) {
-      case TYPE_TCP_CONNECT -> readTcpConnectBody(in);
-      case TYPE_UDP_FRAME -> readUdpFrameBody(in);
-      default -> throw new IOException("unknown msg type");
-    };
   }
 
   static Handshake readHandshakeBody(InputStream in) throws IOException {
@@ -69,6 +41,10 @@ final class Protocol {
     return new Handshake(role, channelId, token);
   }
 
+  static TcpConnect readTcpConnect(InputStream in) throws IOException {
+    return readTcpConnectBody(in);
+  }
+
   static TcpConnect readTcpConnectBody(InputStream in) throws IOException {
     int at = readU8(in);
     InetAddress ip = readAddr(in, (byte) at);
@@ -76,12 +52,13 @@ final class Protocol {
     return new TcpConnect((byte) at, ip, port);
   }
 
-  static UdpFrame readUdpFrameBody(InputStream in) throws IOException {
-    int frameLen = readU32(in);
-    if (frameLen < 1 || frameLen > MAX_FRAME) throw new IOException("bad frame len");
-    byte[] buf = readN(in, frameLen);
-    byte at = buf[0];
-    int off = 1;
+  static UdpFrame readUdpFrame(InputStream in) throws IOException {
+    int flen = readU32(in);
+    if (flen < 2 || flen > MAX_FRAME) throw new IOException("bad frame len");
+    byte[] buf = readN(in, flen);
+    if (buf[0] != MSG_UDP) throw new IOException("bad msg");
+    byte at = buf[1];
+    int off = 2;
     if (buf.length < off + 2) throw new IOException("short frame");
     int srcPort = ((buf[off] & 0xff) << 8) | (buf[off + 1] & 0xff);
     off += 2;
@@ -94,9 +71,33 @@ final class Protocol {
     InetAddress dst = InetAddress.getByAddress(ipb);
     int dstPort = ((buf[off] & 0xff) << 8) | (buf[off + 1] & 0xff);
     off += 2;
-    byte[] payload = new byte[buf.length - off];
+    int padLen = (buf[buf.length - 1] & 0xff) % (MAX_PAD + 1);
+    int payEnd = buf.length - 1 - padLen;
+    if (payEnd < off) payEnd = off;
+    byte[] payload = new byte[payEnd - off];
     System.arraycopy(buf, off, payload, 0, payload.length);
     return new UdpFrame(at, srcPort, dst, dstPort, payload);
+  }
+
+  private static final SecureRandom RND = new SecureRandom();
+
+  static void writeUdpFrame(OutputStream out, UdpFrame f) throws IOException {
+    int ipLen = f.addrType() == ADDR_V6 ? 16 : 4;
+    int padLen = RND.nextInt(MAX_PAD + 1);
+    int payLen = f.payload().length;
+    int flen = 1 + 1 + 2 + ipLen + 2 + payLen + padLen + 1;
+    writeU32(out, flen);
+    out.write(MSG_UDP);
+    out.write(f.addrType());
+    writeU16(out, f.srcPort());
+    out.write(f.dst().getAddress());
+    writeU16(out, f.dstPort());
+    out.write(f.payload());
+    byte[] pad = new byte[padLen];
+    RND.nextBytes(pad);
+    out.write(pad);
+    out.write(padLen & 0xff);
+    out.flush();
   }
 
   static InetAddress readAddr(InputStream in, byte addrType) throws IOException {
