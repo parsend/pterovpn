@@ -10,7 +10,9 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/parsend/pterovpn/internal/protocol"
@@ -149,12 +151,17 @@ func (m *udpMux) dispatch(f protocol.UDPFrame) {
 }
 
 type udpChan struct {
-	conn net.Conn
-	r    *bufio.Reader
-	w    *bufio.Writer
-	mu   sync.Mutex
-	stop chan struct{}
-	cb   func(protocol.UDPFrame)
+	id    byte
+	addrs []string
+	token string
+	cb    func(protocol.UDPFrame)
+
+	conn   net.Conn
+	r      *bufio.Reader
+	w      *bufio.Writer
+	mu     sync.Mutex
+	recMu  sync.Mutex
+	stop   chan struct{}
 }
 
 func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame)) (*udpChan, error) {
@@ -168,11 +175,11 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			continue
 		}
 		uc := &udpChan{
+			id: id, addrs: addrs, token: token, cb: cb,
 			conn: c,
 			r:    bufio.NewReaderSize(c, 64*1024),
 			w:    bufio.NewWriterSize(c, 64*1024),
 			stop: make(chan struct{}),
-			cb:   cb,
 		}
 		hs := protocol.Handshake{Role: protocol.RoleUDP, ChannelID: id, Token: token}
 		if err := hs.Write(uc.w); err != nil {
@@ -195,10 +202,68 @@ func (c *udpChan) Close() error {
 	return c.conn.Close()
 }
 
+func isConnDead(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) {
+		return true
+	}
+	return strings.Contains(err.Error(), "broken pipe") ||
+		strings.Contains(err.Error(), "connection reset")
+}
+
 func (c *udpChan) Send(f protocol.UDPFrame) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	return f.Write(c.w)
+	err := f.Write(c.w)
+	c.mu.Unlock()
+	if err != nil && isConnDead(err) {
+		if c.reconnect() {
+			c.mu.Lock()
+			err = f.Write(c.w)
+			c.mu.Unlock()
+		}
+	}
+	return err
+}
+
+func (c *udpChan) reconnect() bool {
+	c.recMu.Lock()
+	defer c.recMu.Unlock()
+	c.mu.Lock()
+	old := c.conn
+	c.mu.Unlock()
+	_ = old.Close()
+	start := int(c.id) % len(c.addrs)
+	for i := 0; i < len(c.addrs); i++ {
+		a := c.addrs[(start+i)%len(c.addrs)]
+		conn, err := dialTCP(a)
+		if err != nil {
+			continue
+		}
+		w := bufio.NewWriterSize(conn, 64*1024)
+		hs := protocol.Handshake{Role: protocol.RoleUDP, ChannelID: c.id, Token: c.token}
+		if err := hs.Write(w); err != nil {
+			_ = conn.Close()
+			continue
+		}
+		select {
+		case <-c.stop:
+			_ = conn.Close()
+			return false
+		default:
+		}
+		c.mu.Lock()
+		c.conn = conn
+		c.r = bufio.NewReaderSize(conn, 64*1024)
+		c.w = w
+		c.mu.Unlock()
+		go c.readLoop()
+		log.Printf("vpn: udp channel %d reconnected to %s", c.id, a)
+		return true
+	}
+	log.Printf("vpn: udp channel %d reconnect failed", c.id)
+	return false
 }
 
 func (c *udpChan) readLoop() {
