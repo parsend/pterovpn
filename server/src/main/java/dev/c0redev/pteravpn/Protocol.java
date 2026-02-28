@@ -8,108 +8,103 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 final class Protocol {
-  static final byte[] MAGIC = new byte[] { 'P','T','V','P','N' };
   static final byte VERSION = 1;
-
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
-
-  static final byte MSG_UDP = 1;
-
+  static final byte TYPE_HANDSHAKE = 0;
+  static final byte TYPE_TCP_CONNECT = 1;
+  static final byte TYPE_UDP_FRAME = 2;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
+  static final int MAGIC_LEN = 5;
+  static final int MAX_TOKEN = 4096;
+  static final int MAX_FRAME = 64 * 1024 + 64;
 
-  static void writeHandshake(OutputStream out, byte role, byte channelId, String token) throws IOException {
-    out.write(MAGIC);
-    out.write(VERSION);
-    out.write(role);
-    byte[] tok = token.getBytes(StandardCharsets.UTF_8);
-    writeU16(out, tok.length);
-    out.write(tok);
-    if (role == ROLE_UDP) out.write(channelId & 0xff);
-    out.flush();
+  static byte[] magicFromToken(String token) {
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      md.update("ptevpn:".getBytes(StandardCharsets.UTF_8));
+      md.update(token.getBytes(StandardCharsets.UTF_8));
+      byte[] h = md.digest();
+      byte[] out = new byte[MAGIC_LEN];
+      System.arraycopy(h, 0, out, 0, MAGIC_LEN);
+      return out;
+    } catch (NoSuchAlgorithmException e) {
+      throw new RuntimeException(e);
+    }
   }
 
-  static Handshake readHandshake(InputStream in) throws IOException {
-    byte[] magic = readN(in, MAGIC.length);
-    for (int i = 0; i < MAGIC.length; i++) {
-      if (magic[i] != MAGIC[i]) throw new IOException("bad magic");
+  static Handshake readMessage(InputStream in, byte[] expectedMagic) throws IOException {
+    byte[] got = readN(in, MAGIC_LEN);
+    for (int i = 0; i < MAGIC_LEN; i++) {
+      if (got[i] != expectedMagic[i]) throw new IOException("bad magic");
     }
+    int t = readU8(in);
+    if (t != TYPE_HANDSHAKE) throw new IOException("expected handshake");
+    return readHandshakeBody(in);
+  }
+
+  static Object readMessageAfterHandshake(InputStream in) throws IOException {
+    int t = readU8(in);
+    return switch (t) {
+      case TYPE_TCP_CONNECT -> readTcpConnectBody(in);
+      case TYPE_UDP_FRAME -> readUdpFrameBody(in);
+      default -> throw new IOException("unknown msg type");
+    };
+  }
+
+  static Handshake readHandshakeBody(InputStream in) throws IOException {
     int ver = readU8(in);
-    if (ver != VERSION) throw new IOException("bad version: " + ver);
+    if (ver != VERSION) throw new IOException("bad version");
     byte role = (byte) readU8(in);
     int tokenLen = readU16(in);
-    if (tokenLen < 0 || tokenLen > 4096) throw new IOException("bad token len");
+    if (tokenLen < 0 || tokenLen > MAX_TOKEN) throw new IOException("bad token len");
     String token = new String(readN(in, tokenLen), StandardCharsets.UTF_8);
     int channelId = -1;
     if (role == ROLE_UDP) channelId = readU8(in);
     return new Handshake(role, channelId, token);
   }
 
-  static TcpConnect readTcpConnect(InputStream in) throws IOException {
+  static TcpConnect readTcpConnectBody(InputStream in) throws IOException {
     int at = readU8(in);
     InetAddress ip = readAddr(in, (byte) at);
     int port = readU16(in);
     return new TcpConnect((byte) at, ip, port);
   }
 
-  static void writeTcpConnect(OutputStream out, byte addrType, InetAddress ip, int port) throws IOException {
-    out.write(addrType & 0xff);
-    out.write(ip.getAddress());
-    writeU16(out, port);
-    out.flush();
-  }
-
-  static UdpFrame readUdpFrame(InputStream in) throws IOException {
+  static UdpFrame readUdpFrameBody(InputStream in) throws IOException {
     int frameLen = readU32(in);
-    if (frameLen < 1 || frameLen > (64 * 1024 + 64)) throw new IOException("bad frame len");
+    if (frameLen < 1 || frameLen > MAX_FRAME) throw new IOException("bad frame len");
     byte[] buf = readN(in, frameLen);
-    ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
-    byte msg = bb.get();
-    if (msg != MSG_UDP) throw new IOException("bad msg: " + msg);
-    byte at = bb.get();
-    int srcPort = bb.getShort() & 0xffff;
-    InetAddress dst = readAddr(bb, at);
-    int dstPort = bb.getShort() & 0xffff;
-    byte[] payload = new byte[bb.remaining()];
-    bb.get(payload);
+    byte at = buf[0];
+    int off = 1;
+    if (buf.length < off + 2) throw new IOException("short frame");
+    int srcPort = ((buf[off] & 0xff) << 8) | (buf[off + 1] & 0xff);
+    off += 2;
+    int ipLen = at == ADDR_V6 ? 16 : 4;
+    if (at != ADDR_V4 && at != ADDR_V6) throw new IOException("bad addr type");
+    if (buf.length < off + ipLen + 2) throw new IOException("short frame");
+    byte[] ipb = new byte[ipLen];
+    System.arraycopy(buf, off, ipb, 0, ipLen);
+    off += ipLen;
+    InetAddress dst = InetAddress.getByAddress(ipb);
+    int dstPort = ((buf[off] & 0xff) << 8) | (buf[off + 1] & 0xff);
+    off += 2;
+    byte[] payload = new byte[buf.length - off];
+    System.arraycopy(buf, off, payload, 0, payload.length);
     return new UdpFrame(at, srcPort, dst, dstPort, payload);
-  }
-
-  static void writeUdpFrame(OutputStream out, UdpFrame f) throws IOException {
-    byte[] ip = f.dst().getAddress();
-    int ipLen = (f.addrType() == ADDR_V6) ? 16 : 4;
-    if (ip.length != ipLen) throw new IOException("ip mismatch");
-    int frameLen = 1 + 1 + 2 + ipLen + 2 + f.payload().length;
-    writeU32(out, frameLen);
-    out.write(MSG_UDP);
-    out.write(f.addrType() & 0xff);
-    writeU16(out, f.srcPort());
-    out.write(ip);
-    writeU16(out, f.dstPort());
-    out.write(f.payload());
   }
 
   static InetAddress readAddr(InputStream in, byte addrType) throws IOException {
     return switch (addrType) {
       case ADDR_V4 -> InetAddress.getByAddress(readN(in, 4));
       case ADDR_V6 -> InetAddress.getByAddress(readN(in, 16));
-      default -> throw new IOException("bad addr type: " + addrType);
+      default -> throw new IOException("bad addr type");
     };
-  }
-
-  static InetAddress readAddr(ByteBuffer bb, byte addrType) throws IOException {
-    try {
-      return switch (addrType) {
-        case ADDR_V4 -> InetAddress.getByAddress(readN(bb, 4));
-        case ADDR_V6 -> InetAddress.getByAddress(readN(bb, 16));
-        default -> throw new IOException("bad addr type: " + addrType);
-      };
-    } catch (IllegalArgumentException e) {
-      throw new IOException("bad addr bytes", e);
-    }
   }
 
   static byte[] readN(InputStream in, int n) throws IOException {
@@ -121,13 +116,6 @@ final class Protocol {
       off += r;
     }
     return b;
-  }
-
-  static byte[] readN(ByteBuffer bb, int n) throws IOException {
-    if (bb.remaining() < n) throw new IOException("short frame");
-    byte[] out = new byte[n];
-    bb.get(out);
-    return out;
   }
 
   static int readU8(InputStream in) throws IOException {
@@ -162,8 +150,20 @@ final class Protocol {
     out.write(v & 0xff);
   }
 
+  static void writeUdpFrame(OutputStream out, UdpFrame f) throws IOException {
+    byte[] ip = f.dst().getAddress();
+    int ipLen = f.addrType() == ADDR_V6 ? 16 : 4;
+    int frameLen = 1 + 1 + 2 + ipLen + 2 + f.payload().length;
+    writeU32(out, frameLen);
+    out.write(TYPE_UDP_FRAME);
+    out.write(f.addrType());
+    writeU16(out, f.srcPort());
+    out.write(ip);
+    writeU16(out, f.dstPort());
+    out.write(f.payload());
+  }
+
   record Handshake(byte role, int channelId, String token) {}
   record TcpConnect(byte addrType, InetAddress ip, int port) {}
   record UdpFrame(byte addrType, int srcPort, InetAddress dst, int dstPort, byte[] payload) {}
 }
-

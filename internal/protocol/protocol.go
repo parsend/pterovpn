@@ -2,25 +2,40 @@ package protocol
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
 )
 
-var magic = []byte{'P', 'T', 'V', 'P', 'N'}
-
 const (
-	version = 1
+	Version = 1
 
-	roleUDP = 1
-	roleTCP = 2
+	RoleUDP = 1
+	RoleTCP = 2
 
-	msgUDP = 1
+	TypeHandshake  = 0
+	TypeTcpConnect = 1
+	TypeUDPFrame   = 2
 
-	addrV4 = 4
-	addrV6 = 6
+	AddrV4 = 4
+	AddrV6 = 6
+
+	MagicLen = 5
+	MaxToken = 4096
+	MaxFrame = 64*1024 + 64
 )
+
+func MagicFromToken(token string) []byte {
+	h := sha256.Sum256([]byte("ptevpn:" + token))
+	return h[:MagicLen]
+}
+
+type Message interface {
+	Type() byte
+	Write(w *bufio.Writer) error
+}
 
 type Handshake struct {
 	Role      byte
@@ -28,73 +43,37 @@ type Handshake struct {
 	Token     string
 }
 
-func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) error {
+func (h Handshake) Type() byte { return TypeHandshake }
+
+func (h Handshake) Write(w *bufio.Writer) error {
+	magic := MagicFromToken(h.Token)
 	if _, err := w.Write(magic); err != nil {
 		return err
 	}
-	if err := w.WriteByte(version); err != nil {
+	if err := w.WriteByte(TypeHandshake); err != nil {
 		return err
 	}
-	if err := w.WriteByte(role); err != nil {
+	if err := w.WriteByte(Version); err != nil {
 		return err
 	}
-	if len(token) > 4096 {
+	if err := w.WriteByte(h.Role); err != nil {
+		return err
+	}
+	if len(h.Token) > MaxToken {
 		return errors.New("token too long")
 	}
-	if err := writeU16(w, uint16(len(token))); err != nil {
+	if err := writeU16(w, uint16(len(h.Token))); err != nil {
 		return err
 	}
-	if _, err := w.WriteString(token); err != nil {
+	if _, err := w.WriteString(h.Token); err != nil {
 		return err
 	}
-	if role == roleUDP {
-		if err := w.WriteByte(channelID); err != nil {
+	if h.Role == RoleUDP {
+		if err := w.WriteByte(h.ChannelID); err != nil {
 			return err
 		}
 	}
 	return w.Flush()
-}
-
-func ReadHandshake(r *bufio.Reader) (Handshake, error) {
-	got := make([]byte, len(magic))
-	if _, err := io.ReadFull(r, got); err != nil {
-		return Handshake{}, err
-	}
-	for i := range magic {
-		if got[i] != magic[i] {
-			return Handshake{}, errors.New("bad magic")
-		}
-	}
-	ver, err := r.ReadByte()
-	if err != nil {
-		return Handshake{}, err
-	}
-	if ver != version {
-		return Handshake{}, errors.New("bad version")
-	}
-	role, err := r.ReadByte()
-	if err != nil {
-		return Handshake{}, err
-	}
-	tokLen, err := readU16(r)
-	if err != nil {
-		return Handshake{}, err
-	}
-	if tokLen > 4096 {
-		return Handshake{}, errors.New("bad token len")
-	}
-	tok := make([]byte, tokLen)
-	if _, err := io.ReadFull(r, tok); err != nil {
-		return Handshake{}, err
-	}
-	var ch byte
-	if role == roleUDP {
-		ch, err = r.ReadByte()
-		if err != nil {
-			return Handshake{}, err
-		}
-	}
-	return Handshake{Role: role, ChannelID: ch, Token: string(tok)}, nil
 }
 
 type TcpConnect struct {
@@ -103,8 +82,13 @@ type TcpConnect struct {
 	Port     uint16
 }
 
-func WriteTcpConnect(w *bufio.Writer, ip net.IP, port uint16) error {
-	at, ipb, err := normalizeIP(ip)
+func (c TcpConnect) Type() byte { return TypeTcpConnect }
+
+func (c TcpConnect) Write(w *bufio.Writer) error {
+	if err := w.WriteByte(TypeTcpConnect); err != nil {
+		return err
+	}
+	at, ipb, err := normalizeIP(c.IP)
 	if err != nil {
 		return err
 	}
@@ -114,26 +98,10 @@ func WriteTcpConnect(w *bufio.Writer, ip net.IP, port uint16) error {
 	if _, err := w.Write(ipb); err != nil {
 		return err
 	}
-	if err := writeU16(w, port); err != nil {
+	if err := writeU16(w, c.Port); err != nil {
 		return err
 	}
 	return w.Flush()
-}
-
-func ReadTcpConnect(r *bufio.Reader) (TcpConnect, error) {
-	at, err := r.ReadByte()
-	if err != nil {
-		return TcpConnect{}, err
-	}
-	ipb, err := readAddr(r, at)
-	if err != nil {
-		return TcpConnect{}, err
-	}
-	p, err := readU16(r)
-	if err != nil {
-		return TcpConnect{}, err
-	}
-	return TcpConnect{AddrType: at, IP: net.IP(ipb), Port: p}, nil
 }
 
 type UDPFrame struct {
@@ -144,47 +112,9 @@ type UDPFrame struct {
 	Payload  []byte
 }
 
-func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
-	flen, err := readU32(r)
-	if err != nil {
-		return UDPFrame{}, err
-	}
-	if flen < 1 || flen > (64*1024+64) {
-		return UDPFrame{}, errors.New("bad frame len")
-	}
-	buf := make([]byte, flen)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return UDPFrame{}, err
-	}
-	if buf[0] != msgUDP {
-		return UDPFrame{}, errors.New("bad msg")
-	}
-	at := buf[1]
-	off := 2
-	if len(buf) < off+2 {
-		return UDPFrame{}, errors.New("short frame")
-	}
-	srcPort := binary.BigEndian.Uint16(buf[off : off+2])
-	off += 2
-	ipLen := 4
-	if at == addrV6 {
-		ipLen = 16
-	} else if at != addrV4 {
-		return UDPFrame{}, errors.New("bad addr type")
-	}
-	if len(buf) < off+ipLen+2 {
-		return UDPFrame{}, errors.New("short frame")
-	}
-	dstIP := net.IP(buf[off : off+ipLen])
-	off += ipLen
-	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
-	off += 2
-	payload := make([]byte, len(buf)-off)
-	copy(payload, buf[off:])
-	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
-}
+func (f UDPFrame) Type() byte { return TypeUDPFrame }
 
-func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
+func (f UDPFrame) Write(w *bufio.Writer) error {
 	at, ipb, err := normalizeIP(f.DstIP)
 	if err != nil {
 		return err
@@ -194,7 +124,7 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	if err := writeU32(w, uint32(flen)); err != nil {
 		return err
 	}
-	if err := w.WriteByte(msgUDP); err != nil {
+	if err := w.WriteByte(TypeUDPFrame); err != nil {
 		return err
 	}
 	if err := w.WriteByte(at); err != nil {
@@ -215,26 +145,144 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	return w.Flush()
 }
 
-func RoleUDP() byte { return roleUDP }
-func RoleTCP() byte { return roleTCP }
+func ReadMessage(r *bufio.Reader, expectedMagic []byte) (Message, error) {
+	got := make([]byte, MagicLen)
+	if _, err := io.ReadFull(r, got); err != nil {
+		return nil, err
+	}
+	for i := range expectedMagic {
+		if got[i] != expectedMagic[i] {
+			return nil, errors.New("bad magic")
+		}
+	}
+	t, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	if t != TypeHandshake {
+		return nil, errors.New("expected handshake")
+	}
+	return readHandshakeBody(r)
+}
+
+func ReadMessageAfterHandshake(r *bufio.Reader) (Message, error) {
+	t, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	switch t {
+	case TypeTcpConnect:
+		return readTcpConnectBody(r)
+	case TypeUDPFrame:
+		return readUDPFrameBody(r)
+	default:
+		return nil, errors.New("unknown msg type")
+	}
+}
+
+func readHandshakeBody(r *bufio.Reader) (Handshake, error) {
+	ver, err := r.ReadByte()
+	if err != nil {
+		return Handshake{}, err
+	}
+	if ver != Version {
+		return Handshake{}, errors.New("bad version")
+	}
+	role, err := r.ReadByte()
+	if err != nil {
+		return Handshake{}, err
+	}
+	tokLen, err := readU16(r)
+	if err != nil {
+		return Handshake{}, err
+	}
+	if tokLen > MaxToken {
+		return Handshake{}, errors.New("bad token len")
+	}
+	tok := make([]byte, tokLen)
+	if _, err := io.ReadFull(r, tok); err != nil {
+		return Handshake{}, err
+	}
+	var ch byte
+	if role == RoleUDP {
+		ch, err = r.ReadByte()
+		if err != nil {
+			return Handshake{}, err
+		}
+	}
+	return Handshake{Role: role, ChannelID: ch, Token: string(tok)}, nil
+}
+
+func readTcpConnectBody(r *bufio.Reader) (TcpConnect, error) {
+	at, err := r.ReadByte()
+	if err != nil {
+		return TcpConnect{}, err
+	}
+	ipb, err := readAddr(r, at)
+	if err != nil {
+		return TcpConnect{}, err
+	}
+	p, err := readU16(r)
+	if err != nil {
+		return TcpConnect{}, err
+	}
+	return TcpConnect{AddrType: at, IP: net.IP(ipb), Port: p}, nil
+}
+
+func readUDPFrameBody(r *bufio.Reader) (UDPFrame, error) {
+	flen, err := readU32(r)
+	if err != nil {
+		return UDPFrame{}, err
+	}
+	if flen < 1 || flen > MaxFrame {
+		return UDPFrame{}, errors.New("bad frame len")
+	}
+	buf := make([]byte, flen)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return UDPFrame{}, err
+	}
+	at := buf[0]
+	off := 1
+	if len(buf) < off+2 {
+		return UDPFrame{}, errors.New("short frame")
+	}
+	srcPort := binary.BigEndian.Uint16(buf[off : off+2])
+	off += 2
+	ipLen := 4
+	if at == AddrV6 {
+		ipLen = 16
+	} else if at != AddrV4 {
+		return UDPFrame{}, errors.New("bad addr type")
+	}
+	if len(buf) < off+ipLen+2 {
+		return UDPFrame{}, errors.New("short frame")
+	}
+	dstIP := net.IP(buf[off : off+ipLen])
+	off += ipLen
+	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
+	off += 2
+	payload := make([]byte, len(buf)-off)
+	copy(payload, buf[off:])
+	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
+}
 
 func normalizeIP(ip net.IP) (byte, []byte, error) {
 	if v4 := ip.To4(); v4 != nil {
-		return addrV4, []byte(v4), nil
+		return AddrV4, []byte(v4), nil
 	}
 	if v6 := ip.To16(); v6 != nil {
-		return addrV6, []byte(v6), nil
+		return AddrV6, []byte(v6), nil
 	}
 	return 0, nil, errors.New("bad ip")
 }
 
 func readAddr(r *bufio.Reader, at byte) ([]byte, error) {
 	switch at {
-	case addrV4:
+	case AddrV4:
 		b := make([]byte, 4)
 		_, err := io.ReadFull(r, b)
 		return b, err
-	case addrV6:
+	case AddrV6:
 		b := make([]byte, 16)
 		_, err := io.ReadFull(r, b)
 		return b, err

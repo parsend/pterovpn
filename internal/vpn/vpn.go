@@ -174,7 +174,8 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			stop: make(chan struct{}),
 			cb:   cb,
 		}
-		if err := protocol.WriteHandshake(uc.w, protocol.RoleUDP(), id, token); err != nil {
+		hs := protocol.Handshake{Role: protocol.RoleUDP, ChannelID: id, Token: token}
+		if err := hs.Write(uc.w); err != nil {
 			_ = c.Close()
 			last = err
 			continue
@@ -197,7 +198,7 @@ func (c *udpChan) Close() error {
 func (c *udpChan) Send(f protocol.UDPFrame) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return protocol.WriteUDPFrame(c.w, f)
+	return f.Write(c.w)
 }
 
 func (c *udpChan) readLoop() {
@@ -207,9 +208,14 @@ func (c *udpChan) readLoop() {
 			return
 		default:
 		}
-		f, err := protocol.ReadUDPFrame(c.r)
+		msg, err := protocol.ReadMessageAfterHandshake(c.r)
 		if err != nil {
 			log.Printf("vpn: udp channel read failed: %v", err)
+			return
+		}
+		f, ok := msg.(protocol.UDPFrame)
+		if !ok {
+			log.Printf("vpn: unexpected msg type in udp channel")
 			return
 		}
 		c.cb(f)
@@ -284,11 +290,13 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 
 	r := bufio.NewReaderSize(sconn, 64*1024)
 	w := bufio.NewWriterSize(sconn, 64*1024)
-	if err := protocol.WriteHandshake(w, protocol.RoleTCP(), 0, h.opt.Token); err != nil {
+	hs := protocol.Handshake{Role: protocol.RoleTCP, Token: h.opt.Token}
+	if err := hs.Write(w); err != nil {
 		log.Printf("vpn: tcp handshake failed: %v", err)
 		return
 	}
-	if err := protocol.WriteTcpConnect(w, dstIP, dstPort); err != nil {
+	tcMsg := protocol.TcpConnect{IP: dstIP, Port: dstPort}
+	if err := tcMsg.Write(w); err != nil {
 		log.Printf("vpn: tcp connect frame failed: %v", err)
 		return
 	}
