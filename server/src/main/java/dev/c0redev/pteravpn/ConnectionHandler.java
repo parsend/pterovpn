@@ -28,8 +28,7 @@ final class ConnectionHandler implements Runnable {
       InputStream in = new BufferedInputStream(s.getInputStream());
       OutputStream out = s.getOutputStream();
 
-      byte[] expectedMagic = Protocol.magicFromToken(cfg.token());
-      Protocol.Handshake hs = Protocol.readMessage(in, expectedMagic);
+      Protocol.Handshake hs = Protocol.readHandshake(in);
       if (!cfg.token().equals(hs.token())) throw new IOException("bad token");
       log.info("Accepted role=" + hs.role() + " from " + s.getRemoteSocketAddress());
 
@@ -53,13 +52,13 @@ final class ConnectionHandler implements Runnable {
     log.info("UDP channel " + channelId + " registered from " + sock.getRemoteSocketAddress());
     udp.setWriter(channelId, out);
     while (true) {
-      Protocol.UdpFrame f = (Protocol.UdpFrame) Protocol.readMessageAfterHandshake(in);
+      Protocol.UdpFrame f = Protocol.readUdpFrame(in);
       udp.onFrame(channelId, f);
     }
   }
 
   private void handleTcp(InputStream in, OutputStream out) throws IOException {
-      Protocol.TcpConnect c = (Protocol.TcpConnect) Protocol.readMessageAfterHandshake(in);
+    Protocol.TcpConnect c = Protocol.readTcpConnect(in);
     log.info("TCP connect to " + c.ip().getHostAddress() + ":" + c.port());
     try (Socket remote = new Socket()) {
       remote.setTcpNoDelay(true);

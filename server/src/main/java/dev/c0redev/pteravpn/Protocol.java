@@ -150,19 +150,6 @@ final class Protocol {
     out.write(v & 0xff);
   }
 
-  static void writeUdpFrame(OutputStream out, UdpFrame f) throws IOException {
-    byte[] ip = f.dst().getAddress();
-    int ipLen = f.addrType() == ADDR_V6 ? 16 : 4;
-    int frameLen = 1 + 1 + 2 + ipLen + 2 + f.payload().length;
-    writeU32(out, frameLen);
-    out.write(TYPE_UDP_FRAME);
-    out.write(f.addrType());
-    writeU16(out, f.srcPort());
-    out.write(ip);
-    writeU16(out, f.dstPort());
-    out.write(f.payload());
-  }
-
   record Handshake(byte role, int channelId, String token) {}
   record TcpConnect(byte addrType, InetAddress ip, int port) {}
   record UdpFrame(byte addrType, int srcPort, InetAddress dst, int dstPort, byte[] payload) {}
