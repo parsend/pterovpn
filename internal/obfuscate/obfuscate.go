@@ -2,7 +2,6 @@ package obfuscate
 
 import (
 	"crypto/sha256"
-	"io"
 	"net"
 )
 
@@ -38,16 +37,6 @@ func xorBytes(b, key []byte, pos *int) {
 	}
 }
 
-
 func WrapConn(conn net.Conn, token string) net.Conn {
 	return &xorConn{Conn: conn, key: keyFromToken(token)}
-}
-
-func WrapAfterMagic(conn net.Conn, token string) net.Conn {
-	return &xorConn{Conn: conn, key: keyFromToken(token)}
-}
-
-func WriteMagic(w io.Writer, magic []byte) error {
-	_, err := w.Write(magic)
-	return err
 }

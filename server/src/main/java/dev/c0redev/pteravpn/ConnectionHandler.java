@@ -1,5 +1,7 @@
 package dev.c0redev.pteravpn;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.io.BufferedInputStream;
 import java.io.EOFException;
 import java.io.IOException;
@@ -25,11 +27,14 @@ final class ConnectionHandler implements Runnable {
   @Override
   public void run() {
     try (Socket s = sock) {
-      InputStream in = new BufferedInputStream(s.getInputStream());
-      OutputStream out = s.getOutputStream();
+      var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
+      InputStream in = xor.wrapInput(new BufferedInputStream(s.getInputStream()));
+      OutputStream out = xor.wrapOutput(s.getOutputStream());
 
       Protocol.Handshake hs = Protocol.readHandshake(in);
-      if (!cfg.token().equals(hs.token())) throw new IOException("bad token");
+      if (!MessageDigest.isEqual(cfg.token().getBytes(StandardCharsets.UTF_8), hs.token().getBytes(StandardCharsets.UTF_8))) {
+        throw new IOException("bad token");
+      }
       log.info("Accepted role=" + hs.role() + " from " + s.getRemoteSocketAddress());
 
       if (hs.role() == Protocol.ROLE_UDP) {

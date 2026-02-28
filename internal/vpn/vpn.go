@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
@@ -162,7 +163,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
 		a := addrs[(start+i)%len(addrs)]
-		c, err := dialTCP(a)
+		c, err := dialTCP(a, token)
 		if err != nil {
 			last = err
 			continue
@@ -275,7 +276,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 
 	addr := pickAddr(h.opt.ServerAddrs, dstIP, dstPort)
 	log.Printf("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
-	sconn, err := dialTCP(addr)
+	sconn, err := dialTCP(addr, h.opt.Token)
 	if err != nil {
 		log.Printf("vpn: tcp dial server failed: %v", err)
 		return
@@ -308,7 +309,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	log.Printf("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
 }
 
-func dialTCP(addr string) (net.Conn, error) {
+func dialTCP(addr string, token string) (net.Conn, error) {
 	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	c, err := d.Dial("tcp", addr)
 	if err != nil {
@@ -317,7 +318,7 @@ func dialTCP(addr string) (net.Conn, error) {
 	if tc, ok := c.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
-	return c, nil
+	return obfuscate.WrapConn(c, token), nil
 }
 
 func pickAddr(addrs []string, ip net.IP, port uint16) string {
