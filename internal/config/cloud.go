@@ -23,46 +23,64 @@ func cloudConfigPath() (string, error) {
 
 
 func FetchCloud() ([]string, error) {
+	raw, err := fetchCloudRaw()
+	if err != nil {
+		return nil, err
+	}
+	return parseCloudLines(raw), nil
+}
+
+func fetchCloudRaw() (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Get(cloudConfigURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
+		return "", fmt.Errorf("fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch: %s", resp.Status)
+		return "", fmt.Errorf("fetch: %s", resp.Status)
 	}
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(resp.Body); err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return "", fmt.Errorf("read: %w", err)
 	}
 	path, err := cloudConfigPath()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, err
+		return "", err
 	}
 	if err := os.WriteFile(path, buf.Bytes(), 0644); err != nil {
-		return nil, err
+		return "", err
 	}
-	return parseCloudLines(buf.String()), nil
+	return buf.String(), nil
 }
 
-
 func LoadCloud() ([]string, error) {
-	path, err := cloudConfigPath()
+	raw, err := loadCloudRaw()
 	if err != nil {
 		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	return parseCloudLines(raw), nil
+}
+
+func loadCloudRaw() (string, error) {
+	path, err := cloudConfigPath()
+	if err != nil {
+		return "", err
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return "", nil
 		}
-		return nil, err
+		return "", err
 	}
-	return parseCloudLines(string(b)), nil
+	return string(b), nil
 }
 
 func parseCloudLines(s string) []string {
@@ -81,18 +99,21 @@ func parseCloudLines(s string) []string {
 	return out
 }
 
-
 func CloudList(fetch bool) ([]Config, []string, error) {
-	var lines []string
+	var raw string
 	var err error
 	if fetch {
-		lines, err = FetchCloud()
+		raw, err = fetchCloudRaw()
 	} else {
-		lines, err = LoadCloud()
+		raw, err = loadCloudRaw()
 	}
 	if err != nil {
 		return nil, nil, err
 	}
+	if raw == "" {
+		return nil, nil, nil
+	}
+	lines := parseCloudLines(raw)
 	if len(lines) == 0 {
 		return nil, nil, nil
 	}

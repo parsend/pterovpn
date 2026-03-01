@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/parsend/pterovpn/internal/config"
+	"github.com/parsend/pterovpn/internal/geo"
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/probe"
 	"github.com/parsend/pterovpn/internal/update"
@@ -128,6 +130,7 @@ type Model struct {
 	cloudList     list.Model
 	cloudCfgs     []config.Config
 	cloudNames    []string
+	cloudGeo      map[string]geo.Info
 	cloudLoading  bool
 	cloudFetchErr string
 
@@ -191,6 +194,9 @@ var (
 			Foreground(lipgloss.Color("7"))
 	kvValue = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("15"))
+	cloudDetailStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(dim)).
+				MarginTop(1)
 )
 
 func NewModel(opts Opts) Model {
@@ -253,6 +259,27 @@ func (m *Model) refreshCfgItems() {
 	m.cfgList.Select(idx)
 }
 
+func cloudHost(server string) string {
+	host, _, err := net.SplitHostPort(server)
+	if err != nil {
+		return server
+	}
+	return host
+}
+
+func formatGeoName(g geo.Info, fallback string) string {
+	if g.Org != "" {
+		if g.CountryCode != "" {
+			return g.Org + " (" + g.CountryCode + ")"
+		}
+		return g.Org
+	}
+	if g.CountryCode != "" || g.ASN != "" {
+		return strings.TrimSpace(g.CountryCode + " " + g.ASN)
+	}
+	return fallback
+}
+
 func (m *Model) buildCloudItems() []list.Item {
 	items := make([]list.Item, len(m.cloudCfgs))
 	for i := range m.cloudCfgs {
@@ -266,7 +293,13 @@ func (m *Model) buildCloudItems() []list.Item {
 		if v, exists := m.pterovpnRes[m.cloudNames[i]]; exists {
 			pterovpn = v
 		}
-		items[i] = item{cfg: m.cloudCfgs[i], name: m.cloudNames[i], pingMs: pingMs, pterovpn: pterovpn}
+		name := m.cloudNames[i]
+		if m.cloudGeo != nil {
+			if g, ok := m.cloudGeo[cloudHost(m.cloudCfgs[i].Server)]; ok {
+				name = formatGeoName(g, m.cloudNames[i])
+			}
+		}
+		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn}
 	}
 	return items
 }
@@ -280,12 +313,15 @@ func (m *Model) reloadCloud(fetch bool) tea.Cmd {
 	cfgs, names, _ := config.CloudList(false)
 	m.cloudCfgs = cfgs
 	m.cloudNames = names
+	if m.cloudGeo == nil {
+		m.cloudGeo = make(map[string]geo.Info)
+	}
 	items := m.buildCloudItems()
 	l := list.New(items, list.NewDefaultDelegate(), 40, 14)
 	l.Title = "Cloud конфиги"
 	l.SetShowStatusBar(false)
 	m.cloudList = l
-	return nil
+	return runGeoFetches(m.cloudCfgs)
 }
 
 func (m *Model) refreshCloudItems() {
@@ -451,6 +487,11 @@ type cloudFetchedMsg struct {
 	err   string
 }
 
+type geoFetchedMsg struct {
+	host string
+	info geo.Info
+}
+
 type updateCheckMsg struct {
 	latest string
 }
@@ -475,6 +516,29 @@ func runFetchCloud() tea.Cmd {
 		}
 		return cloudFetchedMsg{cfgs: cfgs, names: names}
 	}
+}
+
+func runGeoFetch(host string) tea.Cmd {
+	return func() tea.Msg {
+		info, err := geo.Fetch(host)
+		if err != nil {
+			return nil
+		}
+		return geoFetchedMsg{host: host, info: info}
+	}
+}
+
+func runGeoFetches(cfgs []config.Config) tea.Cmd {
+	seen := make(map[string]bool)
+	var cmds []tea.Cmd
+	for _, c := range cfgs {
+		host := cloudHost(c.Server)
+		if host != "" && !seen[host] {
+			seen[host] = true
+			cmds = append(cmds, runGeoFetch(host))
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func runPing(addr, name string) tea.Cmd {
@@ -524,7 +588,11 @@ func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version), runFetchCloud())
+	cmds := []tea.Cmd{autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version), runFetchCloud()}
+	if len(m.cloudCfgs) > 0 {
+		cmds = append(cmds, runGeoFetches(m.cloudCfgs))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1012,12 +1080,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cloudFetchErr = ""
 		m.cloudCfgs = msg.cfgs
 		m.cloudNames = msg.names
+		if m.cloudGeo == nil {
+			m.cloudGeo = make(map[string]geo.Info)
+		}
 		items := m.buildCloudItems()
 		l := list.New(items, list.NewDefaultDelegate(), 40, 14)
 		l.Title = "Cloud конфиги"
 		l.SetShowStatusBar(false)
 		m.cloudList = l
-		return m, autoProbeCmds(m.cloudCfgs, m.cloudNames)
+		return m, tea.Batch(autoProbeCmds(m.cloudCfgs, m.cloudNames), runGeoFetches(m.cloudCfgs))
+	case geoFetchedMsg:
+		if m.cloudGeo == nil {
+			m.cloudGeo = make(map[string]geo.Info)
+		}
+		m.cloudGeo[msg.host] = msg.info
+		if m.tab == tabCloud {
+			m.refreshCloudItems()
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -1303,6 +1383,24 @@ func (m Model) View() string {
 			content.WriteString(emptyState.Render("Нет конфигов. R - загрузить с реп"))
 		} else {
 			content.WriteString(m.cloudList.View())
+			idx := m.cloudList.Index()
+			if idx >= 0 && idx < len(m.cloudCfgs) && m.cloudGeo != nil {
+				if g, ok := m.cloudGeo[cloudHost(m.cloudCfgs[idx].Server)]; ok {
+					parts := []string{}
+					if g.CountryCode != "" {
+						parts = append(parts, g.CountryCode)
+					}
+					if g.ASN != "" {
+						parts = append(parts, g.ASN)
+					}
+					if g.Org != "" {
+						parts = append(parts, g.Org)
+					}
+					if len(parts) > 0 {
+						content.WriteString(cloudDetailStyle.Render(strings.Join(parts, " · ")))
+					}
+				}
+			}
 		}
 	case tabLogs:
 		m.logsMu.Lock()
