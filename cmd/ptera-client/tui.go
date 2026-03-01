@@ -53,6 +53,7 @@ func runTUI() error {
 
 	opts := tui.Opts{
 		ConnectFn: connectVPN,
+		Version:   version,
 	}
 	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen())
 	go func() {

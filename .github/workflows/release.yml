@@ -34,8 +34,9 @@ jobs:
       - name: build client linux
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-amd64 ./cmd/ptera-client
-          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-arm64 ./cmd/ptera-client
+          VERSION=${GITHUB_REF#refs/tags/}
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o dist/ptera-client-linux-amd64 ./cmd/ptera-client
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o dist/ptera-client-linux-arm64 ./cmd/ptera-client
 
       - name: collect artifacts
         run: |
@@ -55,11 +56,15 @@ jobs:
         with:
           go-version: "1.23.x"
       - run: choco install mingw -y
+      - run: go install github.com/akavel/rsrc@latest
       - run: |
           $env:CGO_ENABLED = "1"
           $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
           mkdir dist -Force
-          go build -trimpath -ldflags "-s -w" -o dist/ptera-client-windows-amd64.exe ./cmd/ptera-client
+          cd cmd/ptera-client
+          rsrc -manifest app.manifest -o rsrc.syso
+          $version = $env:GITHUB_REF -replace 'refs/tags/', ''
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o ../../dist/ptera-client-windows-amd64.exe .
       - name: fetch wintun
         run: |
           Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip -UseBasicParsing

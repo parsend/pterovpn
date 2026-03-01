@@ -17,6 +17,7 @@ import (
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/probe"
+	"github.com/parsend/pterovpn/internal/update"
 )
 
 const (
@@ -54,6 +55,7 @@ type ConnectFn func(cfg config.Config, configName string, reconnectCount int, se
 
 type Opts struct {
 	ConnectFn ConnectFn
+	Version   string
 }
 
 type item struct {
@@ -140,6 +142,8 @@ type Model struct {
 	settingsEditing  bool
 	settingsFormFocus int
 	settingsInputs   []textinput.Model
+
+	updateAvailable string
 
 	connectCount int
 }
@@ -445,7 +449,21 @@ type cloudFetchedMsg struct {
 	err   string
 }
 
+type updateCheckMsg struct {
+	latest string
+}
+
 func LogMessage(s string) tea.Msg { return logMsg(s) }
+
+func runCheckUpdate(currentVersion string) tea.Cmd {
+	return func() tea.Msg {
+		latest, err := update.CheckLatest(currentVersion)
+		if err != nil || latest == "" {
+			return nil
+		}
+		return updateCheckMsg{latest: latest}
+	}
+}
 
 func runFetchCloud() tea.Cmd {
 	return func() tea.Msg {
@@ -504,7 +522,7 @@ func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return autoProbeCmds(m.cfgs, m.names)
+	return tea.Batch(autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version))
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -980,6 +998,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshCfgItems()
 		m.refreshCloudItems()
 		return m, nil
+	case updateCheckMsg:
+		m.updateAvailable = msg.latest
+		return m, nil
 	case cloudFetchedMsg:
 		m.cloudLoading = false
 		if msg.err != "" {
@@ -1162,6 +1183,10 @@ func formatRTT(d time.Duration) string {
 func (m Model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("pteravpn  dev - c0redev(parsend)"))
+	if m.updateAvailable != "" {
+		b.WriteString("  ")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("↑ " + m.updateAvailable))
+	}
 	b.WriteString("  ")
 	switch m.status {
 	case statusConnected:
@@ -1194,6 +1219,9 @@ func (m Model) View() string {
 	var content strings.Builder
 	switch m.tab {
 	case tabHome:
+		if m.updateAvailable != "" {
+			content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Доступно обновление: " + m.updateAvailable + " — https://github.com/parsend/pterovpn/releases\n\n"))
+		}
 		content.WriteString("Статус\n")
 		switch m.status {
 		case statusConnected:

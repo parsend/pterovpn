@@ -12,6 +12,8 @@ import (
 	"github.com/parsend/pterovpn/internal/netcfg"
 )
 
+var version = "dev"
+
 type runOpts struct {
 	serverIP     net.IP
 	token        string

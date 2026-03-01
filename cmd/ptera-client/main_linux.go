@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -18,6 +20,9 @@ import (
 )
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("run as root: sudo ptera-client ...")
+	}
 	if opts.proxy {
 		sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
