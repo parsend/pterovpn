@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,23 +31,53 @@ jobs:
       - name: build server
         run: mvn -q -f server/pom.xml package
 
-      - name: build client
+      - name: build client linux
         run: |
           mkdir -p dist
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-amd64 ./cmd/ptera-client
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-arm64 ./cmd/ptera-client
 
-      - name: collect artifacts
-        run: |
-          cp server/target/ptera-vpn-server.jar dist/ptera-vpn-server.jar
-          cp config.properties.example dist/config.properties.example
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/
 
-      - name: release
-        uses: softprops/action-gh-release@v2
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - run: choco install mingw -y
+      - run: |
+          $env:CGO_ENABLED = "1"
+          $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
+          mkdir dist -Force
+          go build -trimpath -ldflags "-s -w" -o dist/ptera-client-windows-amd64.exe ./cmd/ptera-client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/ptera-client-windows-amd64.exe
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+      - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/ptera-vpn-server.jar
             dist/ptera-client-linux-amd64
             dist/ptera-client-linux-arm64
+            dist/ptera-client-windows-amd64.exe
             dist/config.properties.example
 

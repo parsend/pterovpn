@@ -18,7 +18,9 @@ udpChannels=4
 java -jar ptera-vpn-server.jar
 ```
 
-## client (go, linux)
+## client (go, linux / windows)
+
+Linux:
 
 ```bash
 sudo ./ptera-client \
@@ -57,5 +59,11 @@ exclude — не пускать в туннель локальные подсе�
 ```bash
 sudo ./ptera-client --server 1.2.3.4:25565 --token x \
   --exclude 192.168.0.0/16,10.0.0.0/8
+```
+
+Windows (запуск от администратора, wintun):
+
+```bash
+ptera-client.exe --server 1.2.3.4:25565 --token change-me
 ```
 

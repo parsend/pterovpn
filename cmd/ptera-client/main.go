@@ -1,20 +1,24 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/parsend/pterovpn/internal/netcfg"
-	"github.com/parsend/pterovpn/internal/tun"
-	"github.com/parsend/pterovpn/internal/vpn"
 )
+
+type runOpts struct {
+	serverIP    net.IP
+	token       string
+	tunName     string
+	tunCIDR     string
+	mtu         int
+	routeCIDRs  []*net.IPNet
+	excludeCIDRs []*net.IPNet
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -31,8 +35,8 @@ func run() error {
 		tunName = flag.String("tun", "ptera0", "tun name")
 		tunCIDR = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
 		mtu     = flag.Int("mtu", 1420, "mtu")
-		routes  = flag.String("routes", "", "cidrs to route via tunnel (default=all). e.g. 0.0.0.0/0,::/0")
-		exclude = flag.String("exclude", "", "cidrs to exclude from tunnel (use default gw). e.g. 192.168.0.0/16,10.0.0.0/8")
+		routes  = flag.String("routes", "", "cidrs to route via tunnel (default=all)")
+		exclude = flag.String("exclude", "", "cidrs to exclude from tunnel")
 	)
 	flag.Parse()
 
@@ -57,13 +61,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dr, err := netcfg.GetDefaultRoute()
-	if err != nil {
-		return err
-	}
-	if err := netcfg.AddBypass(sip, dr); err != nil {
-		return err
-	}
 
 	routeCIDRs, err := netcfg.ParseCIDRs(*routes)
 	if err != nil {
@@ -73,56 +70,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := netcfg.AddExcludeRoutes(dr, excludeCIDRs); err != nil {
-		return err
-	}
 
-	f, name, err := tun.Create(*tunName)
-	if err != nil {
-		return err
+	opts := runOpts{
+		serverIP:     sip,
+		token:        *token,
+		tunName:      *tunName,
+		tunCIDR:      *tunCIDR,
+		mtu:          *mtu,
+		routeCIDRs:   routeCIDRs,
+		excludeCIDRs: excludeCIDRs,
 	}
-	defer f.Close()
-	if err := tun.Configure(name, *tunCIDR, *mtu); err != nil {
-		return err
-	}
-	defer func() {
-		netcfg.DelRoutesViaTun(name, routeCIDRs)
-		netcfg.DelExcludeRoutes(excludeCIDRs)
-		netcfg.DelBypass(sip)
-		tun.Teardown(name, *tunCIDR)
-	}()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	ready := make(chan struct{})
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- vpn.Run(ctx, vpn.Options{
-			TunFD:       int(f.Fd()),
-			MTU:         *mtu,
-			Token:       *token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-		})
-	}()
-
-	select {
-	case <-ready:
-		log.Printf("Tunnel ready, switching routes to %s", name)
-		if err := netcfg.AddRoutesViaTun(name, routeCIDRs, 5); err != nil {
-			return err
-		}
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return nil
-	}
-
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-errCh:
-		return err
-	}
+	return runPlatform(addrs, opts)
 }

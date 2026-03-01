@@ -18,6 +18,7 @@ import (
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
+	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 	"gvisor.dev/gvisor/pkg/tcpip"
 )
@@ -28,6 +29,7 @@ type Options struct {
 	Token       string
 	ServerAddrs []string
 	Ready       func()
+	Device      device.Device
 }
 
 func Run(ctx context.Context, opt Options) error {
@@ -42,9 +44,15 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	defer udpMux.Close()
 
-	dev, err := fdbased.Open(strconv.Itoa(opt.TunFD), uint32(opt.MTU), 0)
-	if err != nil {
-		return err
+	var dev device.Device
+	if opt.Device != nil {
+		dev = opt.Device
+	} else {
+		var err error
+		dev, err = fdbased.Open(strconv.Itoa(opt.TunFD), uint32(opt.MTU), 0)
+		if err != nil {
+			return err
+		}
 	}
 	defer dev.Close()
 
