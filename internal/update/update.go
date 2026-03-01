@@ -39,7 +39,7 @@ func CheckLatest(current string) (latest string, err error) {
 		return "", fmt.Errorf("empty tag")
 	}
 	if current == "dev" || current == "" {
-		return "", nil
+		return latest, nil
 	}
 	if Newer(latest, current) {
 		return latest, nil

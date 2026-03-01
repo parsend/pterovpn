@@ -210,6 +210,8 @@ func NewModel(opts Opts) Model {
 	m.clientSettings, _ = config.LoadClientSettings()
 	m.reloadCfgs()
 	m.reloadCloud(false)
+	m.cloudLoading = true
+	m.cloudFetchErr = ""
 	return m
 }
 
@@ -522,7 +524,7 @@ func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version))
+	return tea.Batch(autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version), runFetchCloud())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
