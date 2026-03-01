@@ -12,21 +12,44 @@ import (
 )
 
 func GetDefaultRoute() (DefaultRoute, error) {
-	out, err := exec.Command("route", "print", "0.0.0.0").Output()
+	out, err := exec.Command("route", "print", "-4", "0.0.0.0").Output()
 	if err != nil {
-		return DefaultRoute{}, err
+		out, err = exec.Command("route", "print", "0.0.0.0").Output()
+		if err != nil {
+			return DefaultRoute{}, err
+		}
 	}
 	lines := strings.Split(string(out), "\n")
 	for _, line := range lines {
-		if !strings.Contains(line, "0.0.0.0") {
-			continue
-		}
 		f := strings.Fields(line)
-		if len(f) >= 3 && f[0] == "0.0.0.0" && f[1] == "0.0.0.0" {
-			return DefaultRoute{Gateway: f[2]}, nil
+		if len(f) >= 5 && f[0] == "0.0.0.0" && f[1] == "0.0.0.0" {
+			dr := DefaultRoute{Gateway: f[2]}
+			if iface := interfaceByIP(strings.TrimSpace(f[3])); iface != "" {
+				dr.Dev = iface
+			}
+			return dr, nil
 		}
 	}
 	return DefaultRoute{}, fmt.Errorf("no default route")
+}
+
+func interfaceByIP(needle string) string {
+	out, err := exec.Command("netsh", "interface", "ipv4", "show", "addresses").Output()
+	if err != nil {
+		return ""
+	}
+	var cur string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Configuration for interface ") {
+			cur = strings.Trim(strings.TrimPrefix(line, "Configuration for interface "), "\"")
+			continue
+		}
+		if cur != "" && strings.Contains(line, needle) && net.ParseIP(needle) != nil {
+			return cur
+		}
+	}
+	return ""
 }
 
 func AddBypass(serverIP net.IP, dr DefaultRoute) error {
@@ -36,7 +59,10 @@ func AddBypass(serverIP net.IP, dr DefaultRoute) error {
 	} else {
 		return nil
 	}
-	args := []string{"interface", "ipv4", "add", "route", "prefix=" + ip}
+	args := []string{"interface", "ipv4", "add", "route", "prefix=" + ip, "metric=1"}
+	if dr.Dev != "" {
+		args = append(args, "interface=\""+dr.Dev+"\"")
+	}
 	if dr.Gateway != "" {
 		args = append(args, "nexthop="+dr.Gateway)
 	}

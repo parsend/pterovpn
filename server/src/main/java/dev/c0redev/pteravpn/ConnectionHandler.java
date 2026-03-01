@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Optional;
 import java.util.logging.Logger;
 
 final class ConnectionHandler implements Runnable {
@@ -34,7 +35,8 @@ final class ConnectionHandler implements Runnable {
             );
             OutputStream out = xor.wrapOutput(s.getOutputStream());
 
-            Protocol.Handshake hs = Protocol.readHandshake(in);
+            Protocol.HandshakeResult hr = Protocol.readHandshake(in);
+            Protocol.Handshake hs = hr.handshake();
             if (
                 !MessageDigest.isEqual(
                     cfg.token().getBytes(StandardCharsets.UTF_8),
@@ -51,7 +53,7 @@ final class ConnectionHandler implements Runnable {
             );
 
             if (hs.role() == Protocol.ROLE_UDP) {
-                handleUdp(hs.channelId(), in, out);
+                handleUdp(hs.channelId(), in, out, hr.opts());
                 return;
             }
             if (hs.role() == Protocol.ROLE_TCP) {
@@ -65,7 +67,7 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private void handleUdp(int channelId, InputStream in, OutputStream out)
+    private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)
         throws IOException {
         if (
             channelId < 0 || channelId >= cfg.udpChannels()
@@ -76,7 +78,7 @@ final class ConnectionHandler implements Runnable {
                 " registered from " +
                 sock.getRemoteSocketAddress()
         );
-        udp.setWriter(channelId, out);
+        udp.setWriter(channelId, out, opts);
         while (true) {
             Protocol.UdpFrame f = Protocol.readUdpFrame(in);
             udp.onFrame(channelId, f);

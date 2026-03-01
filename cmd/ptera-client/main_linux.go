@@ -51,6 +51,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			Token:       opts.token,
 			ServerAddrs: addrs,
 			Ready:       func() { close(ready) },
+			Protection:  opts.protection,
 		})
 	}()
 

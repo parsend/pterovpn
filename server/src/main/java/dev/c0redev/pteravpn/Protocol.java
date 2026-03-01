@@ -5,8 +5,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.security.SecureRandom;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Optional;
 
 final class Protocol {
   static final byte[] MAGIC = "PTVPN".getBytes(StandardCharsets.UTF_8);
@@ -21,12 +22,41 @@ final class Protocol {
   static final int MAX_FRAME = 64 * 1024 + 64;
   static final int MAX_PAD = 32;
 
-  static Handshake readHandshake(InputStream in) throws IOException {
-    byte[] got = readN(in, MAGIC_LEN);
-    for (int i = 0; i < MAGIC_LEN; i++) {
-      if (got[i] != MAGIC[i]) throw new IOException("bad magic");
+  static record HandshakeResult(Handshake handshake, Optional<ClientOptions> opts) {}
+
+  static HandshakeResult readHandshake(InputStream in) throws IOException {
+    skipUntilMagic(in);
+    Handshake hs = readHandshakeBody(in);
+    Optional<ClientOptions> opts = readClientOptions(in);
+    return new HandshakeResult(hs, opts);
+  }
+
+  static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
+    if (in.available() < 2) return Optional.empty();
+    int optsLen = readU16(in);
+    if (optsLen <= 0 || optsLen > 512) return Optional.empty();
+    byte[] buf = readN(in, optsLen);
+    return ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
+  }
+
+  static void skipUntilMagic(InputStream in) throws IOException {
+    byte[] buf = new byte[5];
+    int n = 0;
+    while (true) {
+      int b = in.read();
+      if (b == -1) throw new EOFException();
+      System.arraycopy(buf, 1, buf, 0, 4);
+      buf[4] = (byte) b;
+      n++;
+      if (n >= 5
+          && buf[0] == MAGIC[0]
+          && buf[1] == MAGIC[1]
+          && buf[2] == MAGIC[2]
+          && buf[3] == MAGIC[3]
+          && buf[4] == MAGIC[4]) {
+        return;
+      }
     }
-    return readHandshakeBody(in);
   }
 
   static Handshake readHandshakeBody(InputStream in) throws IOException {
@@ -82,8 +112,13 @@ final class Protocol {
   private static final SecureRandom RND = new SecureRandom();
 
   static void writeUdpFrame(OutputStream out, UdpFrame f) throws IOException {
+    writeUdpFrame(out, f, MAX_PAD);
+  }
+
+  static void writeUdpFrame(OutputStream out, UdpFrame f, int maxPad) throws IOException {
+    if (maxPad <= 0 || maxPad > 64) maxPad = MAX_PAD;
     int ipLen = f.addrType() == ADDR_V6 ? 16 : 4;
-    int padLen = RND.nextInt(MAX_PAD + 1);
+    int padLen = RND.nextInt(maxPad + 1);
     int payLen = f.payload().length;
     int flen = 1 + 1 + 2 + ipLen + 2 + payLen + padLen + 1;
     writeU32(out, flen);
@@ -154,4 +189,24 @@ final class Protocol {
   record Handshake(byte role, int channelId, String token) {}
   record TcpConnect(byte addrType, InetAddress ip, int port) {}
   record UdpFrame(byte addrType, int srcPort, InetAddress dst, int dstPort, byte[] payload) {}
+
+  record ClientOptions(int padS4) {
+    static Optional<ClientOptions> parse(String json) {
+      try {
+        int padS4 = 32;
+        if (json.contains("\"padS4\"")) {
+          int i = json.indexOf("\"padS4\"");
+          int start = json.indexOf(":", i) + 1;
+          int end = json.indexOf(",", start);
+          if (end < 0) end = json.indexOf("}", start);
+          if (end < 0) end = json.length();
+          padS4 = Integer.parseInt(json.substring(start, end).trim());
+          if (padS4 < 0 || padS4 > 64) padS4 = 32;
+        }
+        return Optional.of(new ClientOptions(padS4));
+      } catch (Exception e) {
+        return Optional.empty();
+      }
+    }
+  }
 }

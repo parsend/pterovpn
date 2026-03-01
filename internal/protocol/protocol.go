@@ -10,6 +10,10 @@ import (
 	"net"
 )
 
+const maxOptsLen = 512
+
+const maxPrefixLen = 64
+
 var magic = []byte{'P', 'T', 'V', 'P', 'N'}
 
 const (
@@ -31,7 +35,73 @@ type Handshake struct {
 	Token     string
 }
 
+func SkipUntilMagic(r io.Reader) error {
+	var buf [5]byte
+	n := 0
+	for {
+		b, err := readByte(r)
+		if err != nil {
+			return err
+		}
+		buf[0], buf[1], buf[2], buf[3], buf[4] = buf[1], buf[2], buf[3], buf[4], b
+		n++
+		if n >= 5 && buf[0] == magic[0] && buf[1] == magic[1] && buf[2] == magic[2] && buf[3] == magic[3] && buf[4] == magic[4] {
+			return nil
+		}
+	}
+}
+
+func readByte(r io.Reader) (byte, error) {
+	var b [1]byte
+	_, err := io.ReadFull(r, b[:])
+	return b[0], err
+}
+
+func WriteJunk(w io.Writer, count, min, max int) error {
+	if count <= 0 || min <= 0 || max < min {
+		return nil
+	}
+	if max > 1024 {
+		max = 1024
+	}
+	if min > max {
+		min = max
+	}
+	buf := make([]byte, max)
+	for i := 0; i < count; i++ {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
+		sz := min + int(n.Int64())
+		_, _ = rand.Read(buf[:sz])
+		if _, err := w.Write(buf[:sz]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) error {
+	return WriteHandshakeWithPrefix(w, role, channelID, token, 0)
+}
+
+func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {
+	return WriteHandshakeWithPrefixAndOpts(w, role, channelID, token, prefixLen, nil)
+}
+
+func WriteHandshakeWithPrefixAndOpts(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int, optsJSON []byte) error {
+	if prefixLen > maxPrefixLen {
+		prefixLen = maxPrefixLen
+	}
+	if prefixLen > 0 {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(prefixLen)+1))
+		pad := int(n.Int64())
+		if pad > 0 {
+			b := make([]byte, pad)
+			_, _ = rand.Read(b)
+			if _, err := w.Write(b); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := w.Write(magic); err != nil {
 		return err
 	}
@@ -55,6 +125,14 @@ func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) er
 			return err
 		}
 	}
+	if len(optsJSON) > 0 && len(optsJSON) <= maxOptsLen {
+		if err := writeU16(w, uint16(len(optsJSON))); err != nil {
+			return err
+		}
+		if _, err := w.Write(optsJSON); err != nil {
+			return err
+		}
+	}
 	return w.Flush()
 }
 
@@ -68,6 +146,10 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 			return Handshake{}, errors.New("bad magic")
 		}
 	}
+	return readHandshakeBody(r)
+}
+
+func readHandshakeBody(r *bufio.Reader) (Handshake, error) {
 	ver, err := r.ReadByte()
 	if err != nil {
 		return Handshake{}, err

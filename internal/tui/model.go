@@ -2,14 +2,31 @@ package tui
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/parsend/pterovpn/internal/config"
+	"github.com/parsend/pterovpn/internal/metrics"
+	"github.com/parsend/pterovpn/internal/probe"
+)
+
+const (
+	success  = "10"
+	errCol   = "9"
+	dim      = "8"
+	pingGreen = "2"
+	pingYellow = "11"
+	pingRed   = "1"
+	probeTimeout = 5 * time.Second
 )
 
 type tab int
@@ -18,10 +35,11 @@ const (
 	tabHome tab = iota
 	tabConfig
 	tabLogs
+	tabProtection
 	tabSettings
 )
 
-var tabNames = []string{"Главная", "Конфигурации", "Логи", "Настройки"}
+var tabNames = []string{"Главная", "Конфигурации", "Логи", "Защита", "Настройки"}
 
 type status int
 
@@ -31,37 +49,83 @@ const (
 	statusConnected
 )
 
-type ConnectFn func(cfg config.Config) (stop func(), err error)
+type ConnectFn func(cfg config.Config, configName string, reconnectCount int) (stop func(), err error)
 
 type Opts struct {
 	ConnectFn ConnectFn
 }
 
 type item struct {
-	cfg  config.Config
-	name string
+	cfg       config.Config
+	name      string
+	pingMs   int64
+	pterovpn int
 }
 
-func (i item) Title() string       { return i.name }
-func (i item) Description() string { return i.cfg.Server }
+func (i item) Title() string { return i.name }
+func (i item) Description() string {
+	var ping, ptr string
+	if i.pingMs >= 0 {
+		s := fmt.Sprintf("%dms", i.pingMs)
+		switch {
+		case i.pingMs < 100:
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingGreen)).Render(s)
+		case i.pingMs < 300:
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingYellow)).Render(s)
+		default:
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingRed)).Render(s)
+		}
+	} else {
+		ping = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("-")
+	}
+	switch i.pterovpn {
+	case 1:
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(success)).Render("✓")
+	case 0:
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("-")
+	case 2:
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol)).Render("?")
+	default:
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(pingYellow)).Render("?")
+	}
+	return fmt.Sprintf("[%s] [%s] %s", ping, ptr, i.cfg.Server)
+}
 func (i item) FilterValue() string { return i.name + " " + i.cfg.Server }
 
 type Model struct {
-	opts       Opts
-	tab        tab
-	status     status
-	activeCfg  string
-	err        string
-	stop       func()
-	cfgList    list.Model
-	cfgs       []config.Config
-	names      []string
-	logBuf     *bytes.Buffer
-	logs       []string
-	logsMu     sync.Mutex
-	adding     bool
-	addInputs  []textinput.Model
-	addFocus   int
+	opts          Opts
+	tab           tab
+	status        status
+	activeCfg     string
+	err           string
+	stop          func()
+	cfgList       list.Model
+	cfgs          []config.Config
+	names         []string
+	pingResults   map[string]time.Duration
+	pterovpnRes   map[string]int
+	logBuf        *bytes.Buffer
+	logs          []string
+	logsMu        sync.Mutex
+	logViewport   viewport.Model
+	logAutoScroll bool
+	adding        bool
+	addInputs     []textinput.Model
+	addFocus      int
+	editing       bool
+	editingName   string
+	editInputs    []textinput.Model
+	editFocus     int
+	deletingCfg   string
+
+	protectionViewport  viewport.Model
+	protectionEditing   bool
+	protectionFormFocus int
+	protectionInputs    []textinput.Model
+	protectionTarget    string
+	protectionClientIdx int
+
+	connectCount int
 }
 
 var (
@@ -69,44 +133,141 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("15"))
 	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("10"))
+			Foreground(lipgloss.Color(success))
 	errStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("9"))
+			Foreground(lipgloss.Color(errCol))
 	tabStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(dim)).
 			Padding(0, 2)
 	activeTabStyle = lipgloss.NewStyle().
 			Padding(0, 2).
 			Bold(true).
 			Foreground(lipgloss.Color("15"))
+	contentBox = lipgloss.NewStyle().
+			Padding(0, 1).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(dim))
+	logLineStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(dim))
+	logErrStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(errCol))
+	footerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(dim))
 )
 
 func NewModel(opts Opts) Model {
 	m := Model{
-		opts:    opts,
-		tab:     tabHome,
-		status:  statusDisconnected,
-		logBuf:  bytes.NewBuffer(nil),
-		logs:    []string{},
+		opts:               opts,
+		tab:                tabHome,
+		status:             statusDisconnected,
+		logBuf:             bytes.NewBuffer(nil),
+		logs:               []string{},
+		pingResults:        make(map[string]time.Duration),
+		pterovpnRes:        make(map[string]int),
+		logViewport:        viewport.New(60, 14),
+		logAutoScroll:      true,
+		protectionViewport: viewport.New(60, 14),
 	}
 	m.reloadCfgs()
 	return m
+}
+
+func (m *Model) buildItems() []list.Item {
+	items := make([]list.Item, len(m.cfgs))
+	for i := range m.cfgs {
+		pingMs := int64(-1)
+		if d, ok := m.pingResults[m.names[i]]; ok {
+			pingMs = d.Milliseconds()
+		}
+		pterovpn := -1
+		if v, exists := m.pterovpnRes[m.names[i]]; exists {
+			pterovpn = v
+		}
+		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn}
+	}
+	return items
 }
 
 func (m *Model) reloadCfgs() {
 	cfgs, names, _ := config.List()
 	m.cfgs = cfgs
 	m.names = names
-	items := make([]list.Item, len(cfgs))
-	for i := range cfgs {
-		items[i] = item{cfg: cfgs[i], name: names[i]}
-	}
+	items := m.buildItems()
 	l := list.New(items, list.NewDefaultDelegate(), 40, 14)
 	l.Title = "Конфигурации"
 	l.SetShowStatusBar(false)
 	m.cfgList = l
 }
 
+func (m *Model) refreshCfgItems() {
+	idx := m.cfgList.Index()
+	if idx < 0 {
+		idx = 0
+	}
+	m.cfgList.SetItems(m.buildItems())
+	m.cfgList.Select(idx)
+}
+
 func newAddInputs() []textinput.Model {
+	return newInputsWithValues("", "", "", "")
+}
+
+func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
+	ti := func(pl, val string) textinput.Model {
+		t := textinput.New()
+		t.Placeholder = pl
+		t.SetValue(val)
+		return t
+	}
+	obf := opts.Obfuscation
+	if obf == "" {
+		obf = "default"
+	}
+	return []textinput.Model{
+		ti("default|enhanced", obf),
+		ti("0-12", strconv.Itoa(opts.JunkCount)),
+		ti("64-1024", strconv.Itoa(opts.JunkMin)),
+		ti("64-1024", strconv.Itoa(opts.JunkMax)),
+		ti("0-64", strconv.Itoa(opts.PadS1)),
+		ti("0-64", strconv.Itoa(opts.PadS2)),
+		ti("0-64", strconv.Itoa(opts.PadS3)),
+		ti("0-64", strconv.Itoa(opts.PadS4)),
+		ti("true|false", strconv.FormatBool(opts.PreCheck)),
+	}
+}
+
+func protectionOptsFromInputs(inputs []textinput.Model) config.ProtectionOptions {
+	clamp := func(v, lo, hi int) int {
+		if v < lo {
+			return lo
+		}
+		if v > hi {
+			return hi
+		}
+		return v
+	}
+	atoi := func(s string) int {
+		v, _ := strconv.Atoi(strings.TrimSpace(s))
+		return v
+	}
+	obf := strings.TrimSpace(inputs[0].Value())
+	if obf != "enhanced" && obf != "default" {
+		obf = "default"
+	}
+	return config.ProtectionOptions{
+		Obfuscation: obf,
+		JunkCount:   clamp(atoi(inputs[1].Value()), 0, 12),
+		JunkMin:     clamp(atoi(inputs[2].Value()), 64, 1024),
+		JunkMax:     clamp(atoi(inputs[3].Value()), 64, 1024),
+		PadS1:       clamp(atoi(inputs[4].Value()), 0, 64),
+		PadS2:       clamp(atoi(inputs[5].Value()), 0, 64),
+		PadS3:       clamp(atoi(inputs[6].Value()), 0, 64),
+		PadS4:       clamp(atoi(inputs[7].Value()), 0, 64),
+		PreCheck:    strings.ToLower(strings.TrimSpace(inputs[8].Value())) == "true",
+	}
+}
+
+func newInputsWithValues(name, connection, routes, exclude string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
 		t.Placeholder = pl
@@ -114,11 +275,10 @@ func newAddInputs() []textinput.Model {
 		return t
 	}
 	return []textinput.Model{
-		ti("имя", ""),
-		ti("server:port", ""),
-		ti("token", ""),
-		ti("routes (пусто=all)", ""),
-		ti("exclude", ""),
+		ti("имя", name),
+		ti("host:port:key", connection),
+		ti("routes (пусто=all)", routes),
+		ti("exclude", exclude),
 	}
 }
 
@@ -127,8 +287,66 @@ type disconnectedMsg struct{}
 type errMsg string
 type logMsg string
 
+type pingResultMsg struct {
+	name string
+	d    time.Duration
+}
+type pterovpnResultMsg struct {
+	name string
+	ok   bool
+	err  bool
+}
+
+func LogMessage(s string) tea.Msg { return logMsg(s) }
+
+func runPing(addr, name string) tea.Cmd {
+	return func() tea.Msg {
+		d, err := probe.Ping(addr, probeTimeout)
+		if err != nil {
+			return nil
+		}
+		return pingResultMsg{name: name, d: d}
+	}
+}
+
+func runProbePterovpn(addr, name string) tea.Cmd {
+	return func() tea.Msg {
+		ok, err := probe.ProbePterovpn(addr, probeTimeout)
+		if err != nil {
+			return pterovpnResultMsg{name: name, ok: false, err: true}
+		}
+		return pterovpnResultMsg{name: name, ok: ok, err: false}
+	}
+}
+
+func runPingAll(cfgs []config.Config, names []string) tea.Cmd {
+	if len(cfgs) == 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, len(cfgs))
+	for i := range cfgs {
+		cmds[i] = runPing(cfgs[i].Server, names[i])
+	}
+	return tea.Batch(cmds...)
+}
+
+func runProbeAll(cfgs []config.Config, names []string) tea.Cmd {
+	if len(cfgs) == 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, len(cfgs))
+	for i := range cfgs {
+		cmds[i] = runProbePterovpn(cfgs[i].Server, names[i])
+	}
+	return tea.Batch(cmds...)
+}
+
+func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
+	return tea.Batch(runPingAll(cfgs, names), runProbeAll(cfgs, names))
+}
+
 func (m Model) Init() tea.Cmd {
-	return nil
+	return autoProbeCmds(m.cfgs, m.names)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -136,6 +354,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc":
+			if m.deletingCfg != "" {
+				m.deletingCfg = ""
+				return m, nil
+			}
+			if m.protectionEditing {
+				m.protectionEditing = false
+				m.protectionFormFocus = 0
+				return m, nil
+			}
+			if m.editing {
+				m.editing = false
+				m.editingName = ""
+				m.err = ""
+				return m, nil
+			}
 			if m.adding {
 				m.adding = false
 				m.err = ""
@@ -147,14 +380,133 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "n", "N":
-			if m.tab == tabConfig && !m.adding {
+			if m.deletingCfg != "" {
+				m.deletingCfg = ""
+				return m, nil
+			}
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" {
 				m.adding = true
 				m.addInputs = newAddInputs()
 				m.addFocus = 0
 				m.addInputs[0].Focus()
 				return m, nil
 			}
+		case "p", "P":
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
+				idx := m.cfgList.Index()
+				if idx < 0 {
+					idx = 0
+				}
+				if idx < len(m.cfgs) {
+					return m, runPing(m.cfgs[idx].Server, m.names[idx])
+				}
+			}
+		case "t", "T":
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
+				idx := m.cfgList.Index()
+				if idx < 0 {
+					idx = 0
+				}
+				if idx < len(m.cfgs) {
+					return m, runProbePterovpn(m.cfgs[idx].Server, m.names[idx])
+				}
+			}
+		case "d", "D", "delete":
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
+				idx := m.cfgList.Index()
+				if idx >= 0 && idx < len(m.names) {
+					m.deletingCfg = m.names[idx]
+				}
+				return m, nil
+			}
+		case "y", "Y":
+			if m.deletingCfg != "" {
+				_ = config.Delete(m.deletingCfg)
+				m.deletingCfg = ""
+				m.reloadCfgs()
+				return m, autoProbeCmds(m.cfgs, m.names)
+			}
+		case "b", "B":
+			if m.tab == tabSettings && len(m.cfgs) > 0 {
+				return m, runPingAll(m.cfgs, m.names)
+			}
+		case "e", "E":
+			if m.tab == tabProtection && !m.protectionEditing {
+				var opts config.ProtectionOptions
+				if m.protectionTarget == "" {
+					opts, _ = config.LoadProtection()
+				} else {
+					cfg, _ := config.LoadByName(m.protectionTarget)
+					if cfg.Protection != nil {
+						opts = *cfg.Protection
+					}
+				}
+				m.protectionInputs = newProtectionInputs(opts)
+				m.protectionEditing = true
+				m.protectionFormFocus = 0
+				m.protectionInputs[0].Focus()
+				return m, nil
+			}
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
+				idx := m.cfgList.Index()
+				if idx >= 0 && idx < len(m.cfgs) {
+					m.editing = true
+					m.editingName = m.names[idx]
+					cfg := m.cfgs[idx]
+					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude)
+					m.editFocus = 0
+					m.editInputs[0].Focus()
+					m.err = ""
+				}
+				return m, nil
+			}
+		case "ctrl+left", "ctrl+h":
+			if m.tab == tabProtection && !m.protectionEditing && len(m.names) > 0 {
+				m.protectionClientIdx--
+				if m.protectionClientIdx < 0 {
+					m.protectionClientIdx = len(m.names)
+				}
+				m.protectionTarget = ""
+				if m.protectionClientIdx > 0 {
+					m.protectionTarget = m.names[m.protectionClientIdx-1]
+				}
+				return m, nil
+			}
+		case "ctrl+right", "ctrl+l":
+			if m.tab == tabProtection && !m.protectionEditing && len(m.names) > 0 {
+				m.protectionClientIdx = (m.protectionClientIdx + 1) % (len(m.names) + 1)
+				m.protectionTarget = ""
+				if m.protectionClientIdx > 0 {
+					m.protectionTarget = m.names[m.protectionClientIdx-1]
+				}
+				return m, nil
+			}
 		case "tab", "right":
+			if m.deletingCfg != "" {
+				m.deletingCfg = ""
+			}
+			if m.protectionEditing && len(m.protectionInputs) == 9 {
+				m.protectionFormFocus = (m.protectionFormFocus + 1) % 9
+				for i := range m.protectionInputs {
+					if i == m.protectionFormFocus {
+						m.protectionInputs[i].Focus()
+					} else {
+						m.protectionInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
+			if m.editing {
+				m.editFocus = (m.editFocus + 1) % len(m.editInputs)
+				for i := range m.editInputs {
+					if i == m.editFocus {
+						m.editInputs[i].Focus()
+					} else {
+						m.editInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
 			if m.adding {
 				m.addFocus = (m.addFocus + 1) % len(m.addInputs)
 				for i := range m.addInputs {
@@ -166,9 +518,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			m.tab = tab((int(m.tab) + 1) % 4)
+			m.tab = tab((int(m.tab) + 1) % 5)
+			if m.tab == tabConfig && len(m.cfgs) > 0 {
+				return m, autoProbeCmds(m.cfgs, m.names)
+			}
 			return m, nil
 		case "shift+tab", "left":
+			if m.deletingCfg != "" {
+				m.deletingCfg = ""
+			}
+			if m.protectionEditing && len(m.protectionInputs) == 9 {
+				m.protectionFormFocus = (m.protectionFormFocus + 8) % 9
+				for i := range m.protectionInputs {
+					if i == m.protectionFormFocus {
+						m.protectionInputs[i].Focus()
+					} else {
+						m.protectionInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
+			if m.editing {
+				m.editFocus = (m.editFocus + len(m.editInputs) - 1) % len(m.editInputs)
+				for i := range m.editInputs {
+					if i == m.editFocus {
+						m.editInputs[i].Focus()
+					} else {
+						m.editInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
 			if m.adding {
 				m.addFocus = (m.addFocus + len(m.addInputs) - 1) % len(m.addInputs)
 				for i := range m.addInputs {
@@ -180,9 +560,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			m.tab = tab((int(m.tab) + 3) % 4)
+			m.tab = tab((int(m.tab) + 3) % 5)
+			if m.tab == tabConfig && len(m.cfgs) > 0 {
+				return m, autoProbeCmds(m.cfgs, m.names)
+			}
 			return m, nil
 		case "enter":
+			if m.protectionEditing && len(m.protectionInputs) == 9 {
+				opts := protectionOptsFromInputs(m.protectionInputs)
+				if m.protectionTarget == "" {
+					_ = config.SaveProtection(opts)
+				} else {
+					cfg, err := config.LoadByName(m.protectionTarget)
+					if err == nil {
+						cfg.Protection = &opts
+						_ = config.Save(m.protectionTarget, cfg)
+					}
+				}
+				m.protectionEditing = false
+				m.protectionFormFocus = 0
+				return m, nil
+			}
+			if m.editing {
+				if m.editFocus < len(m.editInputs)-1 {
+					m.editFocus++
+					for i := range m.editInputs {
+						if i == m.editFocus {
+							m.editInputs[i].Focus()
+						} else {
+							m.editInputs[i].Blur()
+						}
+					}
+				} else {
+					oldName := m.editingName
+					newName := config.SanitizeName(strings.TrimSpace(m.editInputs[0].Value()))
+					conn := strings.TrimSpace(m.editInputs[1].Value())
+					if newName == "" {
+						newName = "default"
+					}
+					server, token, ok := config.ParseConnection(conn)
+					if !ok {
+						m.err = "connection: host:port:key"
+					} else {
+						cfg := config.Config{Server: server, Token: token, Routes: strings.TrimSpace(m.editInputs[2].Value()), Exclude: strings.TrimSpace(m.editInputs[3].Value())}
+						if newName != oldName {
+							_ = config.Delete(oldName)
+						}
+						if err := config.Save(newName, cfg); err != nil {
+							m.err = err.Error()
+						} else {
+							m.reloadCfgs()
+							m.editing = false
+							m.editingName = ""
+							m.err = ""
+							return m, autoProbeCmds(m.cfgs, m.names)
+						}
+					}
+				}
+				return m, nil
+			}
 			if m.adding {
 				if m.addFocus < len(m.addInputs)-1 {
 					m.addFocus++
@@ -195,24 +631,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else {
 					name := config.SanitizeName(strings.TrimSpace(m.addInputs[0].Value()))
-					server := strings.TrimSpace(m.addInputs[1].Value())
-					token := strings.TrimSpace(m.addInputs[2].Value())
+					conn := strings.TrimSpace(m.addInputs[1].Value())
 					if name == "" {
 						name = "default"
 					}
-					if server == "" || token == "" {
-						m.err = "server и token обязательны"
-					} else if err := config.Save(name, config.Config{Server: server, Token: token, Routes: strings.TrimSpace(m.addInputs[3].Value()), Exclude: strings.TrimSpace(m.addInputs[4].Value())}); err != nil {
+					server, token, ok := config.ParseConnection(conn)
+					if !ok {
+						m.err = "connection: host:port:key"
+					} else if err := config.Save(name, config.Config{Server: server, Token: token, Routes: strings.TrimSpace(m.addInputs[2].Value()), Exclude: strings.TrimSpace(m.addInputs[3].Value())}); err != nil {
 						m.err = err.Error()
 					} else {
 						m.reloadCfgs()
 						m.adding = false
 						m.err = ""
+						return m, autoProbeCmds(m.cfgs, m.names)
 					}
 				}
 				return m, nil
 			}
-			if m.tab == tabConfig && m.opts.ConnectFn != nil && len(m.cfgs) > 0 {
+			if m.tab == tabConfig && m.deletingCfg == "" && m.opts.ConnectFn != nil && len(m.cfgs) > 0 {
 				idx := m.cfgList.Index()
 				if idx < 0 {
 					idx = 0
@@ -229,8 +666,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = statusConnecting
 						m.err = ""
 						m.activeCfg = m.names[idx]
+						m.connectCount++
 						cfg := m.cfgs[idx]
-						return m, waitConnect(cfg, m.opts.ConnectFn)
+						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.opts.ConnectFn)
 					}
 				}
 			}
@@ -253,16 +691,64 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case logMsg:
 		m.logsMu.Lock()
 		m.logs = append(m.logs, string(msg))
-		if len(m.logs) > 100 {
-			m.logs = m.logs[len(m.logs)-100:]
+		if len(m.logs) > 500 {
+			m.logs = m.logs[len(m.logs)-500:]
 		}
 		m.logsMu.Unlock()
+		return m, nil
+	case pingResultMsg:
+		m.pingResults[msg.name] = msg.d
+		m.refreshCfgItems()
+		return m, nil
+	case tea.WindowSizeMsg:
+		m.logViewport.Width = msg.Width - 4
+		m.logViewport.Height = msg.Height - 10
+		if m.logViewport.Height < 5 {
+			m.logViewport.Height = 5
+		}
+		if m.logViewport.Width < 20 {
+			m.logViewport.Width = 20
+		}
+		m.protectionViewport.Width = msg.Width - 4
+		m.protectionViewport.Height = msg.Height - 10
+		if m.protectionViewport.Height < 5 {
+			m.protectionViewport.Height = 5
+		}
+		if m.protectionViewport.Width < 20 {
+			m.protectionViewport.Width = 20
+		}
+		return m, nil
+	case pterovpnResultMsg:
+		if msg.err {
+			m.pterovpnRes[msg.name] = 2
+		} else if msg.ok {
+			m.pterovpnRes[msg.name] = 1
+		} else {
+			m.pterovpnRes[msg.name] = 0
+		}
+		m.refreshCfgItems()
 		return m, nil
 	}
 
 	var cmd tea.Cmd
+	if m.protectionEditing && m.protectionFormFocus < len(m.protectionInputs) {
+		m.protectionInputs[m.protectionFormFocus], cmd = m.protectionInputs[m.protectionFormFocus].Update(msg)
+		return m, cmd
+	}
+	if m.editing && m.editFocus < len(m.editInputs) {
+		m.editInputs[m.editFocus], cmd = m.editInputs[m.editFocus].Update(msg)
+		return m, cmd
+	}
 	if m.adding && m.addFocus < len(m.addInputs) {
 		m.addInputs[m.addFocus], cmd = m.addInputs[m.addFocus].Update(msg)
+		return m, cmd
+	}
+	if m.tab == tabLogs {
+		m.logViewport, cmd = m.logViewport.Update(msg)
+		return m, cmd
+	}
+	if m.tab == tabProtection {
+		m.protectionViewport, cmd = m.protectionViewport.Update(msg)
 		return m, cmd
 	}
 	if m.tab == tabConfig {
@@ -271,9 +757,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func waitConnect(cfg config.Config, fn ConnectFn) tea.Cmd {
+func waitConnect(cfg config.Config, configName string, reconnectCount int, fn ConnectFn) tea.Cmd {
 	return func() tea.Msg {
-		stop, err := fn(cfg)
+		stop, err := fn(cfg, configName, reconnectCount)
 		if err != nil {
 			return errMsg(err.Error())
 		}
@@ -281,9 +767,101 @@ func waitConnect(cfg config.Config, fn ConnectFn) tea.Cmd {
 	}
 }
 
+const protectionAnalyticsLimit = 20
+
+func (m Model) protectionView() string {
+	var b strings.Builder
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(dim))
+
+	b.WriteString(dimStyle.Render("=== Аналитика ===\n"))
+	store, err := metrics.Load()
+	if err == nil && len(store.Records) > 0 {
+		start := len(store.Records) - protectionAnalyticsLimit
+		if start < 0 {
+			start = 0
+		}
+		for i := len(store.Records) - 1; i >= start; i-- {
+			r := store.Records[i]
+			hs := "-"
+			if r.HandshakeOK {
+				hs = lipgloss.NewStyle().Foreground(lipgloss.Color(success)).Render("ok")
+			} else {
+				hs = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol)).Render("fail")
+			}
+			errType := r.ErrorType
+			if errType == "" {
+				errType = "-"
+			}
+			dur := r.Duration.Round(time.Second).String()
+			if r.Duration == 0 && !r.End.IsZero() {
+				dur = "-"
+			}
+			b.WriteString(fmt.Sprintf("%s  %s  %s  HS:%s  R:%d  RTT:%s/%s  DNS:%v/%v\n",
+				r.Start.Format("02.01 15:04"), dur, errType, hs, r.ReconnectCount,
+				formatRTT(r.RTTBefore), formatRTT(r.RTTDuring), r.DNSOKBefore, r.DNSOKAfter))
+		}
+	} else {
+		b.WriteString(dimStyle.Render("нет данных\n"))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("=== Настройки защиты ===\n"))
+	if m.protectionEditing && len(m.protectionInputs) == 9 {
+		labels := []string{"obfuscation:", "junkCount:", "junkMin:", "junkMax:", "padS1:", "padS2:", "padS3:", "padS4:", "preCheck:"}
+		for i := range m.protectionInputs {
+			b.WriteString(labels[i] + " ")
+			b.WriteString(m.protectionInputs[i].View())
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render("Tab - след.  Enter - сохранить  Esc - отмена\n"))
+	} else {
+		var opts config.ProtectionOptions
+		if m.protectionTarget == "" {
+			opts, _ = config.LoadProtection()
+		} else {
+			cfg, _ := config.LoadByName(m.protectionTarget)
+			if cfg.Protection != nil {
+				opts = *cfg.Protection
+			}
+		}
+		obf := opts.Obfuscation
+		if obf == "" {
+			obf = "default"
+		}
+		b.WriteString(fmt.Sprintf("obfuscation: %s  junkCount: %d  junkMin: %d  junkMax: %d\n",
+			obf, opts.JunkCount, opts.JunkMin, opts.JunkMax))
+		b.WriteString(fmt.Sprintf("padS1-4: %d/%d/%d/%d  preCheck: %v\n", opts.PadS1, opts.PadS2, opts.PadS3, opts.PadS4, opts.PreCheck))
+		b.WriteString(dimStyle.Render("E - редактировать\n"))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("=== Клиентские опции ===\n"))
+	target := "Глобально"
+	if m.protectionTarget != "" {
+		target = m.protectionTarget
+	}
+	b.WriteString(fmt.Sprintf("Цель: %s  ", target))
+	if len(m.names) > 0 {
+		b.WriteString(dimStyle.Render("Ctrl+←/→ - переключить"))
+	}
+	b.WriteString("\n")
+
+	full := b.String()
+	m.protectionViewport.SetContent(full)
+	return m.protectionViewport.View()
+}
+
+func formatRTT(d time.Duration) string {
+	if d == 0 {
+		return "-"
+	}
+	return d.Round(time.Millisecond).String()
+}
+
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("pteravpn"))
+	b.WriteString(titleStyle.Render("pteravpn  dev - c0redev(parsend)"))
 	b.WriteString("  ")
 	switch m.status {
 	case statusConnected:
@@ -308,18 +886,19 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n\n")
 
+	var content strings.Builder
 	switch m.tab {
 	case tabHome:
-		b.WriteString("Статус\n")
+		content.WriteString("Статус\n")
 		switch m.status {
 		case statusConnected:
-			b.WriteString(statusStyle.Render("Ядро: Подключено"))
+			content.WriteString(statusStyle.Render("Ядро: Подключено"))
 		case statusConnecting:
-			b.WriteString("Ядро: Подключение...")
+			content.WriteString("Ядро: Подключение...")
 		default:
-			b.WriteString("Ядро: Отключено")
+			content.WriteString("Ядро: Отключено")
 		}
-		b.WriteString("\n")
+		content.WriteString("\n")
 		if m.activeCfg != "" {
 			idx := -1
 			for i, n := range m.names {
@@ -329,46 +908,102 @@ func (m Model) View() string {
 				}
 			}
 			if idx >= 0 && idx < len(m.cfgs) {
-				b.WriteString("Конфигурация: " + m.cfgs[idx].Server + "\n")
+				content.WriteString("Конфигурация: " + m.cfgs[idx].Server + "\n")
 			}
 		}
-		b.WriteString("Tun: Вкл\n")
+		content.WriteString("Tun: Вкл\n")
 		if m.err != "" {
-			b.WriteString(errStyle.Render("Ошибка: " + m.err))
+			content.WriteString(errStyle.Render("Ошибка: " + m.err))
 		}
 	case tabConfig:
-		if m.adding {
-			b.WriteString("Новая конфигурация\n\n")
-			labels := []string{"Имя:", "Server:", "Token:", "Routes:", "Exclude:"}
-			for i := range m.addInputs {
-				b.WriteString(labels[i] + " ")
-				b.WriteString(m.addInputs[i].View())
-				b.WriteString("\n")
+		if m.deletingCfg != "" {
+			content.WriteString("Удалить конфигурацию \"" + m.deletingCfg + "\"? y/n")
+		} else if m.editing {
+			content.WriteString("Редактирование: " + m.editingName + "\n\n")
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:"}
+			for i := range m.editInputs {
+				content.WriteString(labels[i] + " ")
+				content.WriteString(m.editInputs[i].View())
+				content.WriteString("\n")
 			}
-			b.WriteString("\nTab/Enter - следующее  Esc - отмена")
+			content.WriteString("\nTab/Enter - следующее  Esc - отмена")
 			if m.err != "" {
-				b.WriteString("\n")
-				b.WriteString(errStyle.Render(m.err))
+				content.WriteString("\n")
+				content.WriteString(errStyle.Render(m.err))
+			}
+		} else if m.adding {
+			content.WriteString("Новая конфигурация\n\n")
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:"}
+			for i := range m.addInputs {
+				content.WriteString(labels[i] + " ")
+				content.WriteString(m.addInputs[i].View())
+				content.WriteString("\n")
+			}
+			content.WriteString("\nTab/Enter - следующее  Esc - отмена")
+			if m.err != "" {
+				content.WriteString("\n")
+				content.WriteString(errStyle.Render(m.err))
 			}
 		} else {
-			b.WriteString(m.cfgList.View())
+			content.WriteString(m.cfgList.View())
 		}
 	case tabLogs:
 		m.logsMu.Lock()
+		var logLines strings.Builder
 		for _, line := range m.logs {
-			b.WriteString(line)
-			b.WriteString("\n")
+			line = strings.TrimRight(line, "\r\n")
+			if strings.Contains(strings.ToLower(line), "failed") || strings.Contains(strings.ToLower(line), "error") {
+				logLines.WriteString(logErrStyle.Render(line))
+			} else {
+				logLines.WriteString(logLineStyle.Render(line))
+			}
+			logLines.WriteString("\n")
 		}
+		logStr := logLines.String()
 		m.logsMu.Unlock()
+		m.logViewport.SetContent(logStr)
+		if m.logAutoScroll {
+			m.logViewport.GotoBottom()
+		}
+		content.WriteString(m.logViewport.View())
+	case tabProtection:
+		content.WriteString(m.protectionView())
 	case tabSettings:
-		b.WriteString("q/Esc - выход\n")
+		content.WriteString("Утилиты\n\n")
+		if m.activeCfg != "" {
+			idx := -1
+			for i, n := range m.names {
+				if n == m.activeCfg {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 && idx < len(m.cfgs) {
+				content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
+				raw, _ := json.MarshalIndent(m.cfgs[idx], "", "  ")
+				content.WriteString(string(raw))
+				content.WriteString("\n\n")
+			}
+		}
+		content.WriteString("B - тест всех конфигов (ping)\n")
+		content.WriteString("q/Esc - выход\n")
 	}
 
-	b.WriteString("\n\nTab/Shift+Tab или ←/→ - вкладки  ")
-	b.WriteString("q/Esc - выход  ")
-	b.WriteString("Enter - подключиться/отключиться")
-	if m.tab == tabConfig && !m.adding {
-		b.WriteString("  ↑/↓ - выбор  N - добавить")
+	b.WriteString(contentBox.Render(content.String()))
+	b.WriteString("\n\n")
+	footer := "Tab/Shift+Tab или ←/→ - вкладки  q/Esc - выход  Enter - подключиться/отключиться"
+	if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" {
+		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  D - удалить"
 	}
+	if m.tab == tabLogs {
+		footer += "  ↑/↓ PgUp/PgDn Home/End - прокрутка"
+	}
+	if m.tab == tabProtection {
+		footer += "  E - редактировать  Ctrl+←/→ - цель  ↑/↓ PgUp/PgDn - прокрутка"
+	}
+	if m.tab == tabSettings {
+		footer += "  B - тест всех конфигов"
+	}
+	b.WriteString(footerStyle.Render(footer))
 	return b.String()
 }

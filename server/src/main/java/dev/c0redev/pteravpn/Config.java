@@ -12,11 +12,13 @@ final class Config {
   private final List<Integer> listenPorts;
   private final String token;
   private final int udpChannels;
+  private final String publicHost;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
+    this.publicHost = publicHost != null ? publicHost : "";
   }
 
   List<Integer> listenPorts() {
@@ -29,6 +31,10 @@ final class Config {
 
   int udpChannels() {
     return udpChannels;
+  }
+
+  String publicHost() {
+    return publicHost;
   }
 
   static Config load(Path configPath) throws IOException {
@@ -49,7 +55,8 @@ final class Config {
     int udpChannels = parseInt(p.getProperty("udpChannels"), 4);
     if (udpChannels != 4) throw new IOException("udpChannels must be 4");
 
-    return new Config(ports, token, udpChannels);
+    String publicHost = firstNonEmpty(p.getProperty("publicHost"), "");
+    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "");
   }
 
   private static String firstNonEmpty(String a, String b) {

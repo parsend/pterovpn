@@ -28,7 +28,8 @@ class ProtocolTest {
     buf.write(Protocol.ROLE_TCP);
     buf.write(u16(tok.length));
     buf.write(tok);
-    var hs = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    var hs = hr.handshake();
     assertEquals(Protocol.ROLE_TCP, hs.role());
     assertEquals("secret", hs.token());
     assertEquals(-1, hs.channelId());
@@ -44,7 +45,8 @@ class ProtocolTest {
     buf.write(u16(tok.length));
     buf.write(tok);
     buf.write(3);
-    var hs = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    var hs = hr.handshake();
     assertEquals(Protocol.ROLE_UDP, hs.role());
     assertEquals(3, hs.channelId());
   }
@@ -78,6 +80,37 @@ class ProtocolTest {
     assertEquals(f.dstPort(), got.dstPort());
     assertArrayEquals(f.dst().getAddress(), got.dst().getAddress());
     assertArrayEquals(f.payload(), got.payload());
+  }
+
+  @Test
+  void skipUntilMagicWithPrefix() throws IOException {
+    byte[] pad = new byte[]{0x00, 0x01, 0x02, 0x03};
+    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+    buf.write(pad);
+    buf.write("PTVPN".getBytes());
+    buf.write(Protocol.VERSION);
+    buf.write(Protocol.ROLE_UDP);
+    buf.write(u16(1));
+    buf.write('x');
+    buf.write(0);
+    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    var hs = hr.handshake();
+    assertEquals(Protocol.ROLE_UDP, hs.role());
+    assertEquals("x", hs.token());
+  }
+
+  @Test
+  void clientOptionsParse() {
+    var opt = Protocol.ClientOptions.parse("{\"padS4\":48}");
+    assertTrue(opt.isPresent());
+    assertEquals(48, opt.get().padS4());
+  }
+
+  @Test
+  void clientOptionsParseEmpty() {
+    var opt = Protocol.ClientOptions.parse("{}");
+    assertTrue(opt.isPresent());
+    assertEquals(32, opt.get().padS4());
   }
 
   @Test

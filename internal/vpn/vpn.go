@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
 
@@ -30,6 +32,7 @@ type Options struct {
 	ServerAddrs []string
 	Ready       func()
 	Device      device.Device
+	Protection  *config.ProtectionOptions
 }
 
 func Run(ctx context.Context, opt Options) error {
@@ -38,7 +41,7 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	log.Printf("vpn: starting, servers=%v", opt.ServerAddrs)
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection)
 	if err != nil {
 		return err
 	}
@@ -92,13 +95,13 @@ type udpMux struct {
 	assoc map[udpAssocKey]*udpAssoc
 }
 
-func newUDPMux(addrs []string, token string, n int) (*udpMux, error) {
+func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch)
+		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot)
 		if err != nil {
 			log.Printf("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
@@ -166,7 +169,7 @@ type udpChan struct {
 	cb   func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame)) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -183,7 +186,36 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			stop: make(chan struct{}),
 			cb:   cb,
 		}
-		if err := protocol.WriteHandshake(uc.w, protocol.RoleUDP(), id, token); err != nil {
+		prefixLen := 0
+		junkCount, junkMin, junkMax := 0, 64, 1024
+		if prot != nil {
+			if prot.PadS1 > 0 {
+				prefixLen = prot.PadS1
+				if prefixLen > 64 {
+					prefixLen = 64
+				}
+			}
+			if prot.JunkCount > 0 {
+				junkCount = prot.JunkCount
+				if prot.JunkMin > 0 {
+					junkMin = prot.JunkMin
+				}
+				if prot.JunkMax > junkMin {
+					junkMax = prot.JunkMax
+				}
+			}
+		}
+		if err := protocol.WriteJunk(uc.w, junkCount, junkMin, junkMax); err != nil {
+			_ = c.Close()
+			last = err
+			continue
+		}
+		_ = uc.w.Flush()
+		var optsJSON []byte
+		if prot != nil {
+			optsJSON, _ = json.Marshal(prot)
+		}
+		if err := protocol.WriteHandshakeWithPrefixAndOpts(uc.w, protocol.RoleUDP(), id, token, prefixLen, optsJSON); err != nil {
 			_ = c.Close()
 			last = err
 			continue
@@ -293,7 +325,31 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 
 	r := bufio.NewReaderSize(sconn, 64*1024)
 	w := bufio.NewWriterSize(sconn, 64*1024)
-	if err := protocol.WriteHandshake(w, protocol.RoleTCP(), 0, h.opt.Token); err != nil {
+	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
+	if h.opt.Protection != nil {
+		if h.opt.Protection.PadS1 > 0 {
+			prefixLen = h.opt.Protection.PadS1
+			if prefixLen > 64 {
+				prefixLen = 64
+			}
+		}
+		if h.opt.Protection.JunkCount > 0 {
+			junkCount = h.opt.Protection.JunkCount
+			if h.opt.Protection.JunkMin > 0 {
+				junkMin = h.opt.Protection.JunkMin
+			}
+			if h.opt.Protection.JunkMax > junkMin {
+				junkMax = h.opt.Protection.JunkMax
+			}
+		}
+	}
+	_ = protocol.WriteJunk(w, junkCount, junkMin, junkMax)
+	_ = w.Flush()
+	var optsJSON []byte
+	if h.opt.Protection != nil {
+		optsJSON, _ = json.Marshal(h.opt.Protection)
+	}
+	if err := protocol.WriteHandshakeWithPrefixAndOpts(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON); err != nil {
 		log.Printf("vpn: tcp handshake failed: %v", err)
 		return
 	}

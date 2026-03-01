@@ -22,6 +22,12 @@ public final class Main {
 
     log.info("Base: " + base);
     log.info("Ports: " + cfg.listenPorts());
+    String host = cfg.publicHost();
+    if (host != null && !host.isBlank()) {
+      for (int port : cfg.listenPorts()) {
+        log.info("Connection: " + host + ":" + port + ":" + cfg.token());
+      }
+    }
 
     ExecutorService pool = Executors.newCachedThreadPool();
     try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {

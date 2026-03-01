@@ -3,6 +3,7 @@ package dev.c0redev.pteravpn;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.util.Optional;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
@@ -32,9 +33,9 @@ final class UdpSessions implements AutoCloseable {
     this.selectorThread.start();
   }
 
-  void setWriter(int channelId, OutputStream out) {
+  void setWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
     if (channelId < 0 || channelId >= writers.length) throw new IllegalArgumentException("bad channel");
-    writers[channelId] = new UdpChannelWriter(channelId, out);
+    writers[channelId] = new UdpChannelWriter(channelId, out, opts);
   }
 
   void onFrame(int channelId, Protocol.UdpFrame f) throws IOException {
@@ -134,13 +135,15 @@ final class UdpSessions implements AutoCloseable {
   private static final class UdpChannelWriter implements AutoCloseable {
     private final int channelId;
     private final OutputStream out;
+    private final Optional<Protocol.ClientOptions> opts;
     private final LinkedBlockingQueue<Protocol.UdpFrame> q = new LinkedBlockingQueue<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Thread t;
 
-    UdpChannelWriter(int channelId, OutputStream out) {
+    UdpChannelWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
       this.channelId = channelId;
       this.out = out;
+      this.opts = opts != null ? opts : Optional.empty();
       this.t = new Thread(this::loop, "udp-writer-" + channelId);
       this.t.setDaemon(true);
       this.t.start();
@@ -157,7 +160,8 @@ final class UdpSessions implements AutoCloseable {
           Protocol.UdpFrame f = q.poll(1, TimeUnit.SECONDS);
           if (f == null) continue;
           synchronized (out) {
-            Protocol.writeUdpFrame(out, f);
+            int maxPad = opts.map(o -> o.padS4()).filter(p -> p > 0 && p <= 64).orElse(Protocol.MAX_PAD);
+            Protocol.writeUdpFrame(out, f, maxPad);
             out.flush();
           }
         } catch (InterruptedException ignored) {

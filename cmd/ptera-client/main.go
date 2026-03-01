@@ -8,17 +8,19 @@ import (
 	"net"
 	"os"
 
+	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/netcfg"
 )
 
 type runOpts struct {
-	serverIP    net.IP
-	token       string
-	tunName     string
-	tunCIDR     string
-	mtu         int
-	routeCIDRs  []*net.IPNet
+	serverIP     net.IP
+	token        string
+	tunName      string
+	tunCIDR      string
+	mtu          int
+	routeCIDRs   []*net.IPNet
 	excludeCIDRs []*net.IPNet
+	protection *config.ProtectionOptions
 }
 
 func main() {

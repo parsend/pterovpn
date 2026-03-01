@@ -8,10 +8,23 @@ import (
 )
 
 type Config struct {
-	Server  string `json:"server"`
-	Token   string `json:"token"`
-	Routes  string `json:"routes,omitempty"`
-	Exclude string `json:"exclude,omitempty"`
+	Server     string             `json:"server"`
+	Token      string             `json:"token"`
+	Routes     string             `json:"routes,omitempty"`
+	Exclude    string             `json:"exclude,omitempty"`
+	Protection *ProtectionOptions `json:"protection,omitempty"`
+}
+
+type ProtectionOptions struct {
+	Obfuscation string `json:"obfuscation,omitempty"`
+	JunkCount   int    `json:"junkCount,omitempty"`
+	JunkMin     int    `json:"junkMin,omitempty"`
+	JunkMax     int    `json:"junkMax,omitempty"`
+	PadS1       int    `json:"padS1,omitempty"`
+	PadS2       int    `json:"padS2,omitempty"`
+	PadS3       int    `json:"padS3,omitempty"`
+	PadS4       int    `json:"padS4,omitempty"`
+	PreCheck    bool   `json:"preCheck,omitempty"`
 }
 
 func Dir() (string, error) {
@@ -38,6 +51,9 @@ func List() ([]Config, []string, error) {
 	var names []string
 	for _, e := range ents {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		if e.Name() == "metrics.json" || e.Name() == "protection.json" {
 			continue
 		}
 		c, err := Load(filepath.Join(dir, e.Name()))
@@ -104,6 +120,59 @@ func Delete(name string) error {
 		return err
 	}
 	return os.Remove(path)
+}
+
+const protectionFileName = "protection.json"
+
+func LoadProtection() (ProtectionOptions, error) {
+	dir, err := Dir()
+	if err != nil {
+		return ProtectionOptions{}, err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, protectionFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ProtectionOptions{}, nil
+		}
+		return ProtectionOptions{}, err
+	}
+	var p ProtectionOptions
+	if err := json.Unmarshal(b, &p); err != nil {
+		return ProtectionOptions{}, err
+	}
+	return p, nil
+}
+
+func SaveProtection(p ProtectionOptions) error {
+	dir, err := Dir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, protectionFileName), b, 0600)
+}
+
+func ParseConnection(s string) (server, token string, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", "", false
+	}
+	i := strings.LastIndex(s, ":")
+	if i < 0 || i == len(s)-1 {
+		return "", "", false
+	}
+	server = strings.TrimSpace(s[:i])
+	token = strings.TrimSpace(s[i+1:])
+	if server == "" || token == "" {
+		return "", "", false
+	}
+	return server, token, true
 }
 
 func SanitizeName(s string) string {

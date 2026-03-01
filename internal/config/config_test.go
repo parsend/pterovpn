@@ -1,0 +1,83 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestSaveLoadDelete(t *testing.T) {
+	dir := t.TempDir()
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	defer os.Unsetenv("XDG_CONFIG_HOME")
+
+	c := Config{Server: "1.2.3.4:443", Token: "secret"}
+	if err := Save("test", c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadByName("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Server != c.Server || got.Token != c.Token {
+		t.Errorf("got %+v", got)
+	}
+	if err := Delete("test"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadByName("test")
+	if err == nil {
+		t.Error("want error after delete")
+	}
+}
+
+func TestSanitizeName(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"abc", "abc"},
+		{"a-b_c1", "a-b_c1"},
+		{"  x  ", "x"},
+		{"a b", "ab"},
+		{"", "default"},
+		{"!!!", "default"},
+	} {
+		got := SanitizeName(tc.in)
+		if got != tc.want {
+			t.Errorf("SanitizeName(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestProtection(t *testing.T) {
+	dir := t.TempDir()
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	defer os.Unsetenv("XDG_CONFIG_HOME")
+
+	p := ProtectionOptions{PadS1: 32, JunkCount: 3}
+	if err := SaveProtection(p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProtection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PadS1 != p.PadS1 || got.JunkCount != p.JunkCount {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestLoadProtectionNotExist(t *testing.T) {
+	dir := t.TempDir()
+	os.RemoveAll(filepath.Join(dir, "pteravpn"))
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	defer os.Unsetenv("XDG_CONFIG_HOME")
+
+	got, err := LoadProtection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PadS1 != 0 || got.JunkCount != 0 {
+		t.Errorf("want zero value, got %+v", got)
+	}
+}
