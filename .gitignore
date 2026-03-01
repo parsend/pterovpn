@@ -14,3 +14,7 @@ config.properties
 
 rsrc.syso
 
+ptera-client-linux-amd64
+ptera-client-linux-arm64
+ptera-client-windows-amd64.exe
+ptera-vpn-server.jar

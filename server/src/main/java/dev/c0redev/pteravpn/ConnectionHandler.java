@@ -10,6 +10,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.logging.Logger;
 
 final class ConnectionHandler implements Runnable {
@@ -19,11 +21,13 @@ final class ConnectionHandler implements Runnable {
     private final Socket sock;
     private final Config cfg;
     private final UdpSessions udp;
+    private final ExecutorService pumpPool;
 
-    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp) {
+    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, ExecutorService pumpPool) {
         this.sock = sock;
         this.cfg = cfg;
         this.udp = udp;
+        this.pumpPool = pumpPool;
     }
 
     @Override
@@ -98,18 +102,14 @@ final class ConnectionHandler implements Runnable {
             OutputStream rout = remote.getOutputStream();
             OutputStream cout = out;
 
-            Thread t1 = new Thread(() -> pump(in, rout), "tcp-up");
-            Thread t2 = new Thread(() -> pump(rin, cout), "tcp-down");
-            t1.setDaemon(true);
-            t2.setDaemon(true);
-            t1.start();
-            t2.start();
+            Future<?> f1 = pumpPool.submit(() -> pump(in, rout));
+            Future<?> f2 = pumpPool.submit(() -> pump(rin, cout));
             try {
-                t1.join();
-            } catch (InterruptedException ignored) {}
+                f1.get();
+            } catch (Exception ignored) {}
             try {
-                t2.join();
-            } catch (InterruptedException ignored) {}
+                f2.get();
+            } catch (Exception ignored) {}
         }
     }
 
