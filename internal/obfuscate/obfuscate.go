@@ -3,6 +3,7 @@ package obfuscate
 import (
 	"crypto/sha256"
 	"net"
+	"sync"
 )
 
 func keyFromToken(token string) []byte {
@@ -23,11 +24,20 @@ func (c *xorConn) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
+var writeBufPool = sync.Pool{
+	New: func() any { b := make([]byte, 256*1024); return &b },
+}
+
 func (c *xorConn) Write(p []byte) (n int, err error) {
-	buf := make([]byte, len(p))
-	copy(buf, p)
-	xorBytes(buf, c.key, &c.wPos)
-	return c.Conn.Write(buf)
+	buf := writeBufPool.Get().(*[]byte)
+	defer writeBufPool.Put(buf)
+	if cap(*buf) < len(p) {
+		*buf = make([]byte, len(p)*2)
+	}
+	b := (*buf)[:len(p)]
+	copy(b, p)
+	xorBytes(b, c.key, &c.wPos)
+	return c.Conn.Write(b)
 }
 
 func xorBytes(b, key []byte, pos *int) {

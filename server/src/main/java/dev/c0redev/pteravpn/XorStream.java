@@ -52,8 +52,12 @@ final class XorStream {
       @Override
       public void write(byte[] b, int off, int len) throws IOException {
         for (int i = 0; i < len; i++) {
-          out.write((b[off + i] ^ (key[wPos % key.length] & 0xff)) & 0xff);
-          wPos++;
+          b[off + i] ^= key[(wPos + i) % key.length];
+        }
+        wPos += len;
+        out.write(b, off, len);
+        for (int i = 0; i < len; i++) {
+          b[off + i] ^= key[(wPos - len + i) % key.length];
         }
       }
     };
