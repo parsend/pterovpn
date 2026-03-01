@@ -6,11 +6,14 @@ import (
 	"context"
 	"log"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/parsend/pterovpn/internal/netcfg"
 	"github.com/parsend/pterovpn/internal/tun"
 	"github.com/parsend/pterovpn/internal/vpn"
+	"github.com/xjasonlyu/tun2socks/v2/core/device"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 )
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
@@ -27,27 +30,39 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		return err
 	}
 
-	f, name, err := tun.Create(opts.tunName)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if err := tun.Configure(name, opts.tunCIDR, opts.mtu); err != nil {
-		return err
-	}
 	defer func() {
-		netcfg.DelRoutesViaTun(name, opts.routeCIDRs)
 		netcfg.DelExcludeRoutes(opts.excludeCIDRs)
 		netcfg.DelBypass(opts.serverIP)
-		tun.Teardown(name, opts.tunCIDR)
 	}()
+
+	createDevice := func() (device.Device, func(), error) {
+		f, name, err := tun.Create(opts.tunName)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := tun.Configure(name, opts.tunCIDR, opts.mtu); err != nil {
+			_ = f.Close()
+			return nil, nil, err
+		}
+		dev, err := fdbased.Open(strconv.Itoa(int(f.Fd())), uint32(opts.mtu), 0)
+		if err != nil {
+			_ = f.Close()
+			return nil, nil, err
+		}
+		cleanup := func() {
+			netcfg.DelRoutesViaTun(name, opts.routeCIDRs)
+			tun.Teardown(name, opts.tunCIDR)
+			dev.Close()
+			_ = f.Close()
+		}
+		return dev, cleanup, nil
+	}
 
 	ready := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
-			TunFD:       int(f.Fd()),
-			MTU:         opts.mtu,
+			CreateDevice: createDevice,
 			Token:       opts.token,
 			ServerAddrs: addrs,
 			Ready:       func() { close(ready) },
@@ -57,8 +72,8 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 
 	select {
 	case <-ready:
-		log.Printf("Tunnel ready, switching routes to %s", name)
-		if err := netcfg.AddRoutesViaTun(name, opts.routeCIDRs, 5); err != nil {
+		log.Printf("Tunnel ready, switching routes to %s", opts.tunName)
+		if err := netcfg.AddRoutesViaTun(opts.tunName, opts.routeCIDRs, 5); err != nil {
 			return err
 		}
 		if onReady != nil {
@@ -67,11 +82,13 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	case err := <-errCh:
 		return err
 	case <-sigCtx.Done():
+		<-errCh
 		return nil
 	}
 
 	select {
 	case <-sigCtx.Done():
+		<-errCh
 		return nil
 	case err := <-errCh:
 		return err

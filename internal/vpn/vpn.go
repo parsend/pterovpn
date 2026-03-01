@@ -33,7 +33,8 @@ type Options struct {
 	ServerAddrs []string
 	Ready       func()
 	Device      device.Device
-	Protection  *config.ProtectionOptions
+	CreateDevice func() (device.Device, func(), error)
+	Protection   *config.ProtectionOptions
 }
 
 func Run(ctx context.Context, opt Options) error {
@@ -49,7 +50,15 @@ func Run(ctx context.Context, opt Options) error {
 	defer udpMux.Close()
 
 	var dev device.Device
-	if opt.Device != nil {
+	var closeDev func()
+	if opt.CreateDevice != nil {
+		var err error
+		dev, closeDev, err = opt.CreateDevice()
+		if err != nil {
+			return err
+		}
+		defer closeDev()
+	} else if opt.Device != nil {
 		dev = opt.Device
 	} else {
 		var err error
@@ -57,8 +66,8 @@ func Run(ctx context.Context, opt Options) error {
 		if err != nil {
 			return err
 		}
+		defer dev.Close()
 	}
-	defer dev.Close()
 
 	h := &handler{
 		opt:    opt,

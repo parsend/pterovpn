@@ -34,12 +34,13 @@ type tab int
 const (
 	tabHome tab = iota
 	tabConfig
+	tabCloud
 	tabLogs
 	tabProtection
 	tabSettings
 )
 
-var tabNames = []string{"Главная", "Конфигурации", "Логи", "Защита", "Настройки"}
+var tabNames = []string{"Главная", "Конфигурации", "Cloud", "Логи", "Защита", "Настройки"}
 
 type status int
 
@@ -122,6 +123,12 @@ type Model struct {
 	editFocus     int
 	deletingCfg   string
 
+	cloudList     list.Model
+	cloudCfgs     []config.Config
+	cloudNames    []string
+	cloudLoading  bool
+	cloudFetchErr string
+
 	protectionViewport  viewport.Model
 	protectionEditing   bool
 	protectionFormFocus int
@@ -192,6 +199,7 @@ func NewModel(opts Opts) Model {
 		protectionViewport: viewport.New(60, 14),
 	}
 	m.reloadCfgs()
+	m.reloadCloud(false)
 	return m
 }
 
@@ -231,6 +239,53 @@ func (m *Model) refreshCfgItems() {
 	}
 	m.cfgList.SetItems(m.buildItems())
 	m.cfgList.Select(idx)
+}
+
+func (m *Model) buildCloudItems() []list.Item {
+	items := make([]list.Item, len(m.cloudCfgs))
+	for i := range m.cloudCfgs {
+		pingMs := int64(-1)
+		if m.pingFailed[m.cloudNames[i]] {
+			pingMs = -2
+		} else if d, ok := m.pingResults[m.cloudNames[i]]; ok {
+			pingMs = d.Milliseconds()
+		}
+		pterovpn := -1
+		if v, exists := m.pterovpnRes[m.cloudNames[i]]; exists {
+			pterovpn = v
+		}
+		items[i] = item{cfg: m.cloudCfgs[i], name: m.cloudNames[i], pingMs: pingMs, pterovpn: pterovpn}
+	}
+	return items
+}
+
+func (m *Model) reloadCloud(fetch bool) tea.Cmd {
+	if fetch {
+		m.cloudLoading = true
+		m.cloudFetchErr = ""
+		return runFetchCloud()
+	}
+	cfgs, names, _ := config.CloudList(false)
+	m.cloudCfgs = cfgs
+	m.cloudNames = names
+	items := m.buildCloudItems()
+	l := list.New(items, list.NewDefaultDelegate(), 40, 14)
+	l.Title = "Cloud конфиги"
+	l.SetShowStatusBar(false)
+	m.cloudList = l
+	return nil
+}
+
+func (m *Model) refreshCloudItems() {
+	if len(m.cloudCfgs) == 0 {
+		return
+	}
+	idx := m.cloudList.Index()
+	if idx < 0 {
+		idx = 0
+	}
+	m.cloudList.SetItems(m.buildCloudItems())
+	m.cloudList.Select(idx)
 }
 
 func newAddInputs() []textinput.Model {
@@ -343,7 +398,23 @@ type pterovpnResultMsg struct {
 	err  bool
 }
 
+type cloudFetchedMsg struct {
+	cfgs  []config.Config
+	names []string
+	err   string
+}
+
 func LogMessage(s string) tea.Msg { return logMsg(s) }
+
+func runFetchCloud() tea.Cmd {
+	return func() tea.Msg {
+		cfgs, names, err := config.CloudList(true)
+		if err != nil {
+			return cloudFetchedMsg{err: err.Error()}
+		}
+		return cloudFetchedMsg{cfgs: cfgs, names: names}
+	}
+}
 
 func runPing(addr, name string) tea.Cmd {
 	return func() tea.Msg {
@@ -447,6 +518,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, runPing(m.cfgs[idx].Server, m.names[idx])
 				}
 			}
+			if m.tab == tabCloud && !m.cloudLoading && len(m.cloudCfgs) > 0 {
+				idx := m.cloudList.Index()
+				if idx >= 0 && idx < len(m.cloudCfgs) {
+					return m, runPing(m.cloudCfgs[idx].Server, m.cloudNames[idx])
+				}
+			}
 		case "t", "T":
 			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
 				idx := m.cfgList.Index()
@@ -456,6 +533,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if idx < len(m.cfgs) {
 					return m, runProbePterovpn(m.cfgs[idx].Server, m.names[idx])
 				}
+			}
+			if m.tab == tabCloud && !m.cloudLoading && len(m.cloudCfgs) > 0 {
+				idx := m.cloudList.Index()
+				if idx >= 0 && idx < len(m.cloudCfgs) {
+					return m, runProbePterovpn(m.cloudCfgs[idx].Server, m.cloudNames[idx])
+				}
+			}
+		case "r", "R":
+			if m.tab == tabCloud && !m.cloudLoading {
+				return m, m.reloadCloud(true)
 			}
 		case "d", "D", "delete":
 			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
@@ -564,9 +651,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			m.tab = tab((int(m.tab) + 1) % 5)
+			m.tab = tab((int(m.tab) + 1) % 6)
 			if m.tab == tabConfig && len(m.cfgs) > 0 {
 				return m, autoProbeCmds(m.cfgs, m.names)
+			}
+			if m.tab == tabCloud && len(m.cloudCfgs) > 0 {
+				return m, autoProbeCmds(m.cloudCfgs, m.cloudNames)
 			}
 			return m, nil
 		case "shift+tab", "left":
@@ -606,9 +696,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			m.tab = tab((int(m.tab) + 3) % 5)
+			m.tab = tab((int(m.tab) + 3) % 6)
 			if m.tab == tabConfig && len(m.cfgs) > 0 {
 				return m, autoProbeCmds(m.cfgs, m.names)
+			}
+			if m.tab == tabCloud && len(m.cloudCfgs) > 0 {
+				return m, autoProbeCmds(m.cloudCfgs, m.cloudNames)
 			}
 			return m, nil
 		case "enter":
@@ -718,6 +811,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
+			if m.tab == tabCloud && !m.cloudLoading && m.opts.ConnectFn != nil && len(m.cloudCfgs) > 0 {
+				idx := m.cloudList.Index()
+				if idx < 0 {
+					idx = 0
+				}
+				if idx < len(m.cloudCfgs) && m.status != statusConnecting {
+					if m.status == statusConnected {
+						if m.stop != nil {
+							m.stop()
+							m.stop = nil
+						}
+						m.status = statusDisconnected
+						m.activeCfg = ""
+					} else {
+						m.status = statusConnecting
+						m.err = ""
+						m.activeCfg = m.cloudNames[idx]
+						m.connectCount++
+						cfg := m.cloudCfgs[idx]
+						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.opts.ConnectFn)
+					}
+				}
+			}
 		}
 	case connectedMsg:
 		m.status = statusConnected
@@ -751,6 +867,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.pingFailed, msg.name)
 		}
 		m.refreshCfgItems()
+		m.refreshCloudItems()
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.logViewport.Width = msg.Width - 4
@@ -779,7 +896,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pterovpnRes[msg.name] = 0
 		}
 		m.refreshCfgItems()
+		m.refreshCloudItems()
 		return m, nil
+	case cloudFetchedMsg:
+		m.cloudLoading = false
+		if msg.err != "" {
+			m.cloudFetchErr = msg.err
+			return m, nil
+		}
+		m.cloudFetchErr = ""
+		m.cloudCfgs = msg.cfgs
+		m.cloudNames = msg.names
+		items := m.buildCloudItems()
+		l := list.New(items, list.NewDefaultDelegate(), 40, 14)
+		l.Title = "Cloud конфиги"
+		l.SetShowStatusBar(false)
+		m.cloudList = l
+		return m, autoProbeCmds(m.cloudCfgs, m.cloudNames)
 	}
 
 	var cmd tea.Cmd
@@ -807,6 +940,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.tab == tabConfig {
 		m.cfgList, cmd = m.cfgList.Update(msg)
+	}
+	if m.tab == tabCloud {
+		m.cloudList, cmd = m.cloudList.Update(msg)
 	}
 	return m, cmd
 }
@@ -987,6 +1123,13 @@ func (m Model) View() string {
 			}
 			if idx >= 0 && idx < len(m.cfgs) {
 				content.WriteString("Конфигурация: " + m.cfgs[idx].Server + "\n")
+			} else {
+				for i, n := range m.cloudNames {
+					if n == m.activeCfg && i < len(m.cloudCfgs) {
+						content.WriteString("Конфигурация: " + m.cloudCfgs[i].Server + "\n")
+						break
+					}
+				}
 			}
 		}
 		content.WriteString("Tun: Вкл\n")
@@ -1025,6 +1168,17 @@ func (m Model) View() string {
 		} else {
 			content.WriteString(m.cfgList.View())
 		}
+	case tabCloud:
+		if m.cloudLoading {
+			content.WriteString("Загрузка cloud конфигов...")
+		} else if m.cloudFetchErr != "" {
+			content.WriteString(errStyle.Render("Ошибка: " + m.cloudFetchErr))
+			content.WriteString("\n\nR - обновить")
+		} else if len(m.cloudCfgs) == 0 {
+			content.WriteString(emptyState.Render("Нет конфигов. R - загрузить с реп"))
+		} else {
+			content.WriteString(m.cloudList.View())
+		}
 	case tabLogs:
 		m.logsMu.Lock()
 		var logLines strings.Builder
@@ -1061,6 +1215,16 @@ func (m Model) View() string {
 				raw, _ := json.MarshalIndent(m.cfgs[idx], "", "  ")
 				content.WriteString(string(raw))
 				content.WriteString("\n\n")
+			} else {
+				for i, n := range m.cloudNames {
+					if n == m.activeCfg && i < len(m.cloudCfgs) {
+						content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
+						raw, _ := json.MarshalIndent(m.cloudCfgs[i], "", "  ")
+						content.WriteString(string(raw))
+						content.WriteString("\n\n")
+						break
+					}
+				}
 			}
 		}
 		content.WriteString("B - тест всех конфигов (ping)\n")
@@ -1072,6 +1236,9 @@ func (m Model) View() string {
 	footer := "Tab/Shift+Tab или ←/→ - вкладки  q/Esc - выход  Enter - подключиться/отключиться"
 	if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" {
 		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  D - удалить"
+	}
+	if m.tab == tabCloud && !m.cloudLoading {
+		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  R - обновить"
 	}
 	if m.tab == tabLogs {
 		footer += "  ↑/↓ PgUp/PgDn Home/End - прокрутка"
