@@ -67,3 +67,15 @@ Windows (запуск от администратора, wintun):
 ptera-client.exe --server 1.2.3.4:25565 --token change-me
 ```
 
+TUI (linux / windows):
+
+```bash
+./ptera-client --tui
+```
+
+Конфиги в `~/.config/pteravpn/` (linux) или `%APPDATA%\pteravpn\` (windows). Формат JSON:
+
+```json
+{"server": "1.2.3.4:25565", "token": "secret", "routes": "", "exclude": "192.168.0.0/16"}
+```
+

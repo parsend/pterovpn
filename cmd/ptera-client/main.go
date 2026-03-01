@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,7 @@ func main() {
 
 func run() error {
 	var (
+		tui     = flag.Bool("tui", false, "run TUI")
 		server  = flag.String("server", "", "host:port or host")
 		ports   = flag.String("ports", "", "csv ports for multiport")
 		token   = flag.String("token", "", "token")
@@ -39,6 +41,10 @@ func run() error {
 		exclude = flag.String("exclude", "", "cidrs to exclude from tunnel")
 	)
 	flag.Parse()
+
+	if *tui {
+		return runTUI()
+	}
 
 	if *server == "" || *token == "" {
 		return errors.New("need --server and --token")
@@ -80,5 +86,5 @@ func run() error {
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,
 	}
-	return runPlatform(addrs, opts)
+	return runPlatform(context.Background(), addrs, opts, nil)
 }

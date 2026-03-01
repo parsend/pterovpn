@@ -17,7 +17,7 @@ import (
 	"github.com/parsend/pterovpn/internal/vpn"
 )
 
-func runPlatform(addrs []string, opts runOpts) error {
+func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
 	dr, err := netcfg.GetDefaultRoute()
 	if err != nil {
 		return err
@@ -44,13 +44,13 @@ func runPlatform(addrs []string, opts runOpts) error {
 		netcfg.DelBypass(opts.serverIP)
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	ready := make(chan struct{})
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- vpn.Run(ctx, vpn.Options{
+		errCh <- vpn.Run(sigCtx, vpn.Options{
 			Device:      dev,
 			MTU:         opts.mtu,
 			Token:       opts.token,
@@ -65,14 +65,17 @@ func runPlatform(addrs []string, opts runOpts) error {
 		if err := netcfg.AddRoutesViaTun(name, opts.routeCIDRs, 5); err != nil {
 			return err
 		}
+		if onReady != nil {
+			onReady()
+		}
 	case err := <-errCh:
 		return err
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		return nil
 	}
 
 	select {
-	case <-ctx.Done():
+	case <-sigCtx.Done():
 		return nil
 	case err := <-errCh:
 		return err
