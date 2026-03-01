@@ -37,6 +37,11 @@ jobs:
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-amd64 ./cmd/ptera-client
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/ptera-client-linux-arm64 ./cmd/ptera-client
 
+      - name: collect artifacts
+        run: |
+          cp server/target/ptera-vpn-server.jar dist/
+          cp config.properties.example dist/config.properties.example
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-build
