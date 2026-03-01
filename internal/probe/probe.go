@@ -3,9 +3,11 @@ package probe
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/parsend/pterovpn/internal/obfuscate"
@@ -51,6 +53,12 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 		log.Printf("probe: handshake write: %v", err)
 		return false, err
 	}
+	if err := w.Flush(); err != nil {
+		return false, err
+	}
+	if tcp, ok := c.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	}
 
 	_ = c.SetReadDeadline(time.Now().Add(timeout))
 	buf := make([]byte, 1)
@@ -61,6 +69,9 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 	if err != nil {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			return false, nil
+		}
+		if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+			return true, nil
 		}
 		return false, err
 	}

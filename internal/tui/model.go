@@ -65,28 +65,31 @@ type item struct {
 func (i item) Title() string { return i.name }
 func (i item) Description() string {
 	var ping, ptr string
-	if i.pingMs >= 0 {
+	switch {
+	case i.pingMs >= 0:
 		s := fmt.Sprintf("%dms", i.pingMs)
 		switch {
 		case i.pingMs < 100:
-			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingGreen)).Render(s)
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingGreen)).Render("✓ " + s)
 		case i.pingMs < 300:
-			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingYellow)).Render(s)
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingYellow)).Render("✓ " + s)
 		default:
-			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingRed)).Render(s)
+			ping = lipgloss.NewStyle().Foreground(lipgloss.Color(pingRed)).Render("✓ " + s)
 		}
-	} else {
-		ping = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("-")
+	case i.pingMs == -2:
+		ping = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol)).Render("✗")
+	default:
+		ping = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("○")
 	}
 	switch i.pterovpn {
 	case 1:
 		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(success)).Render("✓")
 	case 0:
-		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("-")
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("✗")
 	case 2:
-		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol)).Render("?")
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol)).Render("⚠")
 	default:
-		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(pingYellow)).Render("?")
+		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("○")
 	}
 	return fmt.Sprintf("[%s] [%s] %s", ping, ptr, i.cfg.Server)
 }
@@ -103,6 +106,7 @@ type Model struct {
 	cfgs          []config.Config
 	names         []string
 	pingResults   map[string]time.Duration
+	pingFailed    map[string]bool
 	pterovpnRes   map[string]int
 	logBuf        *bytes.Buffer
 	logs          []string
@@ -153,6 +157,24 @@ var (
 			Foreground(lipgloss.Color(errCol))
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(dim))
+	sectionTitle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("12")).
+			Padding(0, 0, 0, 1).
+			BorderLeft(true).
+			BorderForeground(lipgloss.Color("12"))
+	emptyState = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(dim)).
+			Italic(true)
+	hintKey = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("14"))
+	hintText = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(dim))
+	kvLabel = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("7"))
+	kvValue = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15"))
 )
 
 func NewModel(opts Opts) Model {
@@ -163,6 +185,7 @@ func NewModel(opts Opts) Model {
 		logBuf:             bytes.NewBuffer(nil),
 		logs:               []string{},
 		pingResults:        make(map[string]time.Duration),
+		pingFailed:         make(map[string]bool),
 		pterovpnRes:        make(map[string]int),
 		logViewport:        viewport.New(60, 14),
 		logAutoScroll:      true,
@@ -176,7 +199,9 @@ func (m *Model) buildItems() []list.Item {
 	items := make([]list.Item, len(m.cfgs))
 	for i := range m.cfgs {
 		pingMs := int64(-1)
-		if d, ok := m.pingResults[m.names[i]]; ok {
+		if m.pingFailed[m.names[i]] {
+			pingMs = -2
+		} else if d, ok := m.pingResults[m.names[i]]; ok {
 			pingMs = d.Milliseconds()
 		}
 		pterovpn := -1
@@ -267,6 +292,26 @@ func protectionOptsFromInputs(inputs []textinput.Model) config.ProtectionOptions
 	}
 }
 
+func fillConnectionFromAnyField(inputs []textinput.Model) []textinput.Model {
+	if len(inputs) < 2 {
+		return inputs
+	}
+	connIdx := 1
+	for i, in := range inputs {
+		v := strings.TrimSpace(in.Value())
+		if _, _, ok := config.ParseConnection(v); !ok || v == "" {
+			continue
+		}
+		if i == connIdx {
+			return inputs
+		}
+		inputs[connIdx].SetValue(v)
+		inputs[i].SetValue("")
+		break
+	}
+	return inputs
+}
+
 func newInputsWithValues(name, connection, routes, exclude string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
@@ -288,8 +333,9 @@ type errMsg string
 type logMsg string
 
 type pingResultMsg struct {
-	name string
-	d    time.Duration
+	name  string
+	d     time.Duration
+	failed bool
 }
 type pterovpnResultMsg struct {
 	name string
@@ -303,7 +349,7 @@ func runPing(addr, name string) tea.Cmd {
 	return func() tea.Msg {
 		d, err := probe.Ping(addr, probeTimeout)
 		if err != nil {
-			return nil
+			return pingResultMsg{name: name, failed: true}
 		}
 		return pingResultMsg{name: name, d: d}
 	}
@@ -697,7 +743,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logsMu.Unlock()
 		return m, nil
 	case pingResultMsg:
-		m.pingResults[msg.name] = msg.d
+		if msg.failed {
+			m.pingFailed[msg.name] = true
+			delete(m.pingResults, msg.name)
+		} else {
+			m.pingResults[msg.name] = msg.d
+			delete(m.pingFailed, msg.name)
+		}
 		m.refreshCfgItems()
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -737,10 +789,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.editing && m.editFocus < len(m.editInputs) {
 		m.editInputs[m.editFocus], cmd = m.editInputs[m.editFocus].Update(msg)
+		m.editInputs = fillConnectionFromAnyField(m.editInputs)
 		return m, cmd
 	}
 	if m.adding && m.addFocus < len(m.addInputs) {
 		m.addInputs[m.addFocus], cmd = m.addInputs[m.addFocus].Update(msg)
+		m.addInputs = fillConnectionFromAnyField(m.addInputs)
 		return m, cmd
 	}
 	if m.tab == tabLogs {
@@ -771,9 +825,8 @@ const protectionAnalyticsLimit = 20
 
 func (m Model) protectionView() string {
 	var b strings.Builder
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(dim))
 
-	b.WriteString(dimStyle.Render("=== Аналитика ===\n"))
+	b.WriteString(sectionTitle.Render("Аналитика") + "\n")
 	store, err := metrics.Load()
 	if err == nil && len(store.Records) > 0 {
 		start := len(store.Records) - protectionAnalyticsLimit
@@ -796,25 +849,34 @@ func (m Model) protectionView() string {
 			if r.Duration == 0 && !r.End.IsZero() {
 				dur = "-"
 			}
-			b.WriteString(fmt.Sprintf("%s  %s  %s  HS:%s  R:%d  RTT:%s/%s  DNS:%v/%v\n",
-				r.Start.Format("02.01 15:04"), dur, errType, hs, r.ReconnectCount,
-				formatRTT(r.RTTBefore), formatRTT(r.RTTDuring), r.DNSOKBefore, r.DNSOKAfter))
+			b.WriteString("  ")
+			b.WriteString(kvLabel.Render(r.Start.Format("02.01 15:04")) + " ")
+			b.WriteString(kvValue.Render(fmt.Sprintf("%s  %s  HS:%s  R:%d  RTT:%s/%s  DNS:%v/%v",
+				dur, errType, hs, r.ReconnectCount,
+				formatRTT(r.RTTBefore), formatRTT(r.RTTDuring), r.DNSOKBefore, r.DNSOKAfter)))
+			b.WriteString("\n")
 		}
 	} else {
-		b.WriteString(dimStyle.Render("нет данных\n"))
+		b.WriteString("  ")
+		b.WriteString(emptyState.Render("нет данных"))
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("=== Настройки защиты ===\n"))
+	b.WriteString(sectionTitle.Render("Настройки защиты") + "\n")
 	if m.protectionEditing && len(m.protectionInputs) == 9 {
-		labels := []string{"obfuscation:", "junkCount:", "junkMin:", "junkMax:", "padS1:", "padS2:", "padS3:", "padS4:", "preCheck:"}
+		labels := []string{"obfuscation", "junkCount", "junkMin", "junkMax", "padS1", "padS2", "padS3", "padS4", "preCheck"}
 		for i := range m.protectionInputs {
-			b.WriteString(labels[i] + " ")
+			b.WriteString("  ")
+			b.WriteString(kvLabel.Render(labels[i]+":") + " ")
 			b.WriteString(m.protectionInputs[i].View())
 			b.WriteString("\n")
 		}
-		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Tab - след.  Enter - сохранить  Esc - отмена\n"))
+		b.WriteString("\n  ")
+		b.WriteString(hintKey.Render("Tab") + " ")
+		b.WriteString(hintText.Render("след.  ") + hintKey.Render("Enter") + " ")
+		b.WriteString(hintText.Render("сохранить  ") + hintKey.Render("Esc") + " ")
+		b.WriteString(hintText.Render("отмена") + "\n")
 	} else {
 		var opts config.ProtectionOptions
 		if m.protectionTarget == "" {
@@ -829,21 +891,37 @@ func (m Model) protectionView() string {
 		if obf == "" {
 			obf = "default"
 		}
-		b.WriteString(fmt.Sprintf("obfuscation: %s  junkCount: %d  junkMin: %d  junkMax: %d\n",
-			obf, opts.JunkCount, opts.JunkMin, opts.JunkMax))
-		b.WriteString(fmt.Sprintf("padS1-4: %d/%d/%d/%d  preCheck: %v\n", opts.PadS1, opts.PadS2, opts.PadS3, opts.PadS4, opts.PreCheck))
-		b.WriteString(dimStyle.Render("E - редактировать\n"))
+		b.WriteString("  ")
+		b.WriteString(kvLabel.Render("obfuscation:") + " ")
+		b.WriteString(kvValue.Render(obf) + "   ")
+		b.WriteString(kvLabel.Render("junkCount:") + " ")
+		b.WriteString(kvValue.Render(strconv.Itoa(opts.JunkCount)) + "   ")
+		b.WriteString(kvLabel.Render("junkMin:") + " ")
+		b.WriteString(kvValue.Render(strconv.Itoa(opts.JunkMin)) + "   ")
+		b.WriteString(kvLabel.Render("junkMax:") + " ")
+		b.WriteString(kvValue.Render(strconv.Itoa(opts.JunkMax)) + "\n")
+		b.WriteString("  ")
+		b.WriteString(kvLabel.Render("padS1-4:") + " ")
+		b.WriteString(kvValue.Render(fmt.Sprintf("%d/%d/%d/%d", opts.PadS1, opts.PadS2, opts.PadS3, opts.PadS4)) + "   ")
+		b.WriteString(kvLabel.Render("preCheck:") + " ")
+		b.WriteString(kvValue.Render(fmt.Sprintf("%v", opts.PreCheck)) + "\n")
+		b.WriteString("  ")
+		b.WriteString(hintKey.Render("E") + " ")
+		b.WriteString(hintText.Render("редактировать") + "\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("=== Клиентские опции ===\n"))
+	b.WriteString(sectionTitle.Render("Клиентские опции") + "\n")
 	target := "Глобально"
 	if m.protectionTarget != "" {
 		target = m.protectionTarget
 	}
-	b.WriteString(fmt.Sprintf("Цель: %s  ", target))
+	b.WriteString("  ")
+	b.WriteString(kvLabel.Render("Цель:") + " ")
+	b.WriteString(kvValue.Render(target))
 	if len(m.names) > 0 {
-		b.WriteString(dimStyle.Render("Ctrl+←/→ - переключить"))
+		b.WriteString("   ")
+		b.WriteString(hintKey.Render("Ctrl+←/→") + hintText.Render(" переключить"))
 	}
 	b.WriteString("\n")
 
