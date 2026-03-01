@@ -1,9 +1,13 @@
 package probe
 
 import (
+	"bufio"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/parsend/pterovpn/internal/obfuscate"
+	"github.com/parsend/pterovpn/internal/protocol"
 )
 
 func TestPingInvalidAddr(t *testing.T) {
@@ -86,6 +90,38 @@ func TestProbePterovpnCloseOnBadToken(t *testing.T) {
 	}
 	if !ok {
 		t.Error("want ok=true when server closes after handshake")
+	}
+}
+
+
+func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
+	serverToken := "secret123"
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("no tcp:", err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		wrapped := obfuscate.WrapConn(c, serverToken)
+		r := bufio.NewReader(wrapped)
+		_, err = protocol.ReadHandshake(r)
+		if err != nil {
+			c.Close()
+			return
+		}
+	}()
+
+	ok, err := ProbePterovpn(l.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !ok {
+		t.Error("want ok=true: server applies XOR, rejects bad token, closes")
 	}
 }
 
