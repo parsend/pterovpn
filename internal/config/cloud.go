@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const cloudConfigURL = "https://github.com/parsend/pterovpn/blob/mew/cloud-config.txt"
+const cloudConfigURL = "https://raw.githubusercontent.com/parsend/pterovpn/refs/heads/mew/cloud-config.txt"
 const cloudConfigFile = "cloud-config.txt"
 
 func cloudConfigPath() (string, error) {
