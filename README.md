@@ -61,7 +61,7 @@ sudo ./ptera-client --server 1.2.3.4:25565 --token x \
   --exclude 192.168.0.0/16,10.0.0.0/8
 ```
 
-Windows (запуск от администратора, wintun):
+Windows (запуск от администратора, нужен wintun.dll рядом с exe — в релизах уже есть, иначе https://www.wintun.net):
 
 ```bash
 ptera-client.exe --server 1.2.3.4:25565 --token change-me

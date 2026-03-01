@@ -60,10 +60,15 @@ jobs:
           $env:PATH = "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin;$env:PATH"
           mkdir dist -Force
           go build -trimpath -ldflags "-s -w" -o dist/ptera-client-windows-amd64.exe ./cmd/ptera-client
+      - name: fetch wintun
+        run: |
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip -UseBasicParsing
+          Expand-Archive -Path wintun.zip -DestinationPath wintun
+          Copy-Item wintun\wintun\bin\amd64\wintun.dll dist\
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/ptera-client-windows-amd64.exe
+          path: dist/
 
   release:
     needs: [build-linux, build-windows]
@@ -84,5 +89,6 @@ jobs:
             dist/ptera-client-linux-amd64
             dist/ptera-client-linux-arm64
             dist/ptera-client-windows-amd64.exe
+            dist/wintun.dll
             dist/config.properties.example
 
