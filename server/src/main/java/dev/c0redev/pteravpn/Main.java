@@ -13,13 +13,14 @@ import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
 public final class Main {
-  private static final Logger log = Log.logger(Main.class);
+  private static Logger log;
 
   public static void main(String[] args) throws Exception {
     Path base = jarDir();
     Path cfgPath = base.resolve("config.properties");
     Config cfg = Config.load(cfgPath);
-
+    Log.setDebug(cfg.debug());
+    log = Log.logger(Main.class);
     log.info("Base: " + base);
     log.info("Ports: " + cfg.listenPorts());
     String host = cfg.publicHost();

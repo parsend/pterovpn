@@ -13,12 +13,18 @@ final class Config {
   private final String token;
   private final int udpChannels;
   private final String publicHost;
+  private final boolean debug;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
     this.publicHost = publicHost != null ? publicHost : "";
+    this.debug = debug;
+  }
+
+  boolean debug() {
+    return debug;
   }
 
   List<Integer> listenPorts() {
@@ -56,7 +62,8 @@ final class Config {
     if (udpChannels != 4) throw new IOException("udpChannels must be 4");
 
     String publicHost = firstNonEmpty(p.getProperty("publicHost"), "");
-    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "");
+    boolean debug = "true".equalsIgnoreCase(p.getProperty("debug", "").trim());
+    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug);
   }
 
   private static String firstNonEmpty(String a, String b) {
