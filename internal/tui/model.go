@@ -50,7 +50,7 @@ const (
 	statusConnected
 )
 
-type ConnectFn func(cfg config.Config, configName string, reconnectCount int) (stop func(), err error)
+type ConnectFn func(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error)
 
 type Opts struct {
 	ConnectFn ConnectFn
@@ -136,6 +136,11 @@ type Model struct {
 	protectionTarget    string
 	protectionClientIdx int
 
+	clientSettings   config.ClientSettings
+	settingsEditing  bool
+	settingsFormFocus int
+	settingsInputs   []textinput.Model
+
 	connectCount int
 }
 
@@ -198,6 +203,7 @@ func NewModel(opts Opts) Model {
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
 	}
+	m.clientSettings, _ = config.LoadClientSettings()
 	m.reloadCfgs()
 	m.reloadCloud(false)
 	return m
@@ -314,6 +320,41 @@ func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
 		ti("0-64", strconv.Itoa(opts.PadS4)),
 		ti("true|false", strconv.FormatBool(opts.PreCheck)),
 	}
+}
+
+func newSettingsInputs(s config.ClientSettings) []textinput.Model {
+	ti := func(pl, val string) textinput.Model {
+		t := textinput.New()
+		t.Placeholder = pl
+		t.SetValue(val)
+		return t
+	}
+	mode := s.Mode
+	if mode == "" {
+		mode = "tun"
+	}
+	sysProxy := "false"
+	if s.SystemProxy {
+		sysProxy = "true"
+	}
+	return []textinput.Model{
+		ti("tun|proxy", mode),
+		ti("127.0.0.1:1080", s.ProxyListen),
+		ti("true|false", sysProxy),
+	}
+}
+
+func settingsFromInputs(inputs []textinput.Model) config.ClientSettings {
+	mode := strings.ToLower(strings.TrimSpace(inputs[0].Value()))
+	if mode != "proxy" {
+		mode = "tun"
+	}
+	listen := strings.TrimSpace(inputs[1].Value())
+	if listen == "" {
+		listen = "127.0.0.1:1080"
+	}
+	sysProxy := strings.ToLower(strings.TrimSpace(inputs[2].Value())) == "true"
+	return config.ClientSettings{Mode: mode, ProxyListen: listen, SystemProxy: sysProxy}
 }
 
 func protectionOptsFromInputs(inputs []textinput.Model) config.ProtectionOptions {
@@ -471,6 +512,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc":
+			if m.settingsEditing {
+				m.settingsEditing = false
+				m.settingsFormFocus = 0
+				return m, nil
+			}
 			if m.deletingCfg != "" {
 				m.deletingCfg = ""
 				return m, nil
@@ -564,6 +610,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, runPingAll(m.cfgs, m.names)
 			}
 		case "e", "E":
+			if m.tab == tabSettings && !m.settingsEditing {
+				m.settingsEditing = true
+				m.settingsFormFocus = 0
+				m.settingsInputs = newSettingsInputs(m.clientSettings)
+				m.settingsInputs[0].Focus()
+				return m, nil
+			}
 			if m.tab == tabProtection && !m.protectionEditing {
 				var opts config.ProtectionOptions
 				if m.protectionTarget == "" {
@@ -618,6 +671,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.deletingCfg != "" {
 				m.deletingCfg = ""
 			}
+			if m.settingsEditing && len(m.settingsInputs) == 3 {
+				m.settingsFormFocus = (m.settingsFormFocus + 1) % 3
+				for i := range m.settingsInputs {
+					if i == m.settingsFormFocus {
+						m.settingsInputs[i].Focus()
+					} else {
+						m.settingsInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
 			if m.protectionEditing && len(m.protectionInputs) == 9 {
 				m.protectionFormFocus = (m.protectionFormFocus + 1) % 9
 				for i := range m.protectionInputs {
@@ -663,6 +727,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.deletingCfg != "" {
 				m.deletingCfg = ""
 			}
+			if m.settingsEditing && len(m.settingsInputs) == 3 {
+				m.settingsFormFocus = (m.settingsFormFocus + 2) % 3
+				for i := range m.settingsInputs {
+					if i == m.settingsFormFocus {
+						m.settingsInputs[i].Focus()
+					} else {
+						m.settingsInputs[i].Blur()
+					}
+				}
+				return m, nil
+			}
 			if m.protectionEditing && len(m.protectionInputs) == 9 {
 				m.protectionFormFocus = (m.protectionFormFocus + 8) % 9
 				for i := range m.protectionInputs {
@@ -705,6 +780,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
+			if m.settingsEditing && len(m.settingsInputs) == 3 {
+				m.clientSettings = settingsFromInputs(m.settingsInputs)
+				_ = config.SaveClientSettings(m.clientSettings)
+				m.settingsEditing = false
+				m.settingsFormFocus = 0
+				return m, nil
+			}
 			if m.protectionEditing && len(m.protectionInputs) == 9 {
 				opts := protectionOptsFromInputs(m.protectionInputs)
 				if m.protectionTarget == "" {
@@ -807,7 +889,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.activeCfg = m.names[idx]
 						m.connectCount++
 						cfg := m.cfgs[idx]
-						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.opts.ConnectFn)
+						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
 					}
 				}
 			}
@@ -830,7 +912,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.activeCfg = m.cloudNames[idx]
 						m.connectCount++
 						cfg := m.cloudCfgs[idx]
-						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.opts.ConnectFn)
+						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
 					}
 				}
 			}
@@ -916,6 +998,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	if m.settingsEditing && m.settingsFormFocus < len(m.settingsInputs) {
+		m.settingsInputs[m.settingsFormFocus], cmd = m.settingsInputs[m.settingsFormFocus].Update(msg)
+		return m, cmd
+	}
 	if m.protectionEditing && m.protectionFormFocus < len(m.protectionInputs) {
 		m.protectionInputs[m.protectionFormFocus], cmd = m.protectionInputs[m.protectionFormFocus].Update(msg)
 		return m, cmd
@@ -947,9 +1033,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func waitConnect(cfg config.Config, configName string, reconnectCount int, fn ConnectFn) tea.Cmd {
+func waitConnect(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, fn ConnectFn) tea.Cmd {
 	return func() tea.Msg {
-		stop, err := fn(cfg, configName, reconnectCount)
+		stop, err := fn(cfg, configName, reconnectCount, settings)
 		if err != nil {
 			return errMsg(err.Error())
 		}
@@ -1085,7 +1171,12 @@ func (m Model) View() string {
 	default:
 		b.WriteString("Ядро: Отключено")
 	}
-	b.WriteString("  Tun: Вкл  ")
+	mode := m.clientSettings.Mode
+	if mode == "" || mode == "tun" {
+		b.WriteString("  TUN  ")
+	} else {
+		b.WriteString("  Proxy  ")
+	}
 	if m.activeCfg != "" {
 		b.WriteString("Конфигурация: " + m.activeCfg)
 	}
@@ -1132,7 +1223,11 @@ func (m Model) View() string {
 				}
 			}
 		}
-		content.WriteString("Tun: Вкл\n")
+		if m.clientSettings.Mode == "proxy" {
+			content.WriteString("Режим: Proxy (" + m.clientSettings.ProxyListen + ")\n")
+		} else {
+			content.WriteString("Режим: TUN\n")
+		}
 		if m.err != "" {
 			content.WriteString(errStyle.Render("Ошибка: " + m.err))
 		}
@@ -1201,34 +1296,56 @@ func (m Model) View() string {
 	case tabProtection:
 		content.WriteString(m.protectionView())
 	case tabSettings:
-		content.WriteString("Утилиты\n\n")
-		if m.activeCfg != "" {
-			idx := -1
-			for i, n := range m.names {
-				if n == m.activeCfg {
-					idx = i
-					break
-				}
+		if m.settingsEditing && len(m.settingsInputs) == 3 {
+			content.WriteString("Режим подключения\n\n")
+			labels := []string{"Режим (tun|proxy):", "Прокси (addr:port):", "System proxy (Windows):"}
+			for i := range m.settingsInputs {
+				content.WriteString(labels[i] + " ")
+				content.WriteString(m.settingsInputs[i].View())
+				content.WriteString("\n")
 			}
-			if idx >= 0 && idx < len(m.cfgs) {
-				content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
-				raw, _ := json.MarshalIndent(m.cfgs[idx], "", "  ")
-				content.WriteString(string(raw))
-				content.WriteString("\n\n")
-			} else {
-				for i, n := range m.cloudNames {
-					if n == m.activeCfg && i < len(m.cloudCfgs) {
-						content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
-						raw, _ := json.MarshalIndent(m.cloudCfgs[i], "", "  ")
-						content.WriteString(string(raw))
-						content.WriteString("\n\n")
+			content.WriteString("\nTab/Enter - сохранить  Esc - отмена")
+		} else {
+			content.WriteString("Утилиты\n\n")
+			if m.activeCfg != "" {
+				idx := -1
+				for i, n := range m.names {
+					if n == m.activeCfg {
+						idx = i
 						break
 					}
 				}
+				if idx >= 0 && idx < len(m.cfgs) {
+					content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
+					raw, _ := json.MarshalIndent(m.cfgs[idx], "", "  ")
+					content.WriteString(string(raw))
+					content.WriteString("\n\n")
+				} else {
+					for i, n := range m.cloudNames {
+						if n == m.activeCfg && i < len(m.cloudCfgs) {
+							content.WriteString("Активный конфиг: " + m.activeCfg + "\n\n")
+							raw, _ := json.MarshalIndent(m.cloudCfgs[i], "", "  ")
+							content.WriteString(string(raw))
+							content.WriteString("\n\n")
+							break
+						}
+					}
+				}
 			}
+			content.WriteString("Режим: ")
+			if m.clientSettings.Mode == "proxy" {
+				content.WriteString(statusStyle.Render("Proxy") + " (" + m.clientSettings.ProxyListen + ")")
+				if m.clientSettings.SystemProxy {
+					content.WriteString("  System proxy: вкл")
+				}
+			} else {
+				content.WriteString(statusStyle.Render("TUN"))
+			}
+			content.WriteString("\n")
+			content.WriteString("E - редактировать режим\n\n")
+			content.WriteString("B - тест всех конфигов (ping)\n")
+			content.WriteString("q/Esc - выход\n")
 		}
-		content.WriteString("B - тест всех конфигов (ping)\n")
-		content.WriteString("q/Esc - выход\n")
 	}
 
 	b.WriteString(contentBox.Render(content.String()))
@@ -1247,7 +1364,7 @@ func (m Model) View() string {
 		footer += "  E - редактировать  Ctrl+←/→ - цель  ↑/↓ PgUp/PgDn - прокрутка"
 	}
 	if m.tab == tabSettings {
-		footer += "  B - тест всех конфигов"
+		footer += "  E - режим (TUN/Proxy)  B - тест всех конфигов"
 	}
 	b.WriteString(footerStyle.Render(footer))
 	return b.String()

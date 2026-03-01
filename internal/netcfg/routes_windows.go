@@ -110,6 +110,9 @@ func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 			continue
 		}
 		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "metric=1"}
+		if dr.Dev != "" {
+			args = append(args, "interface=\""+dr.Dev+"\"")
+		}
 		if dr.Gateway != "" {
 			args = append(args, "nexthop="+dr.Gateway)
 		}
@@ -131,7 +134,10 @@ func DelExcludeRoutes(cidrs []*net.IPNet) {
 }
 
 func AddRoutesViaTun(iface string, cidrs []*net.IPNet, metric int) error {
-	gateway := "10.13.37.1"
+	gateway := tunGateway(iface)
+	if gateway == "" {
+		gateway = "10.13.37.1"
+	}
 	metricStr := strconv.Itoa(metric)
 	if len(cidrs) == 0 {
 		return AddDefaultViaTun(iface, metric)

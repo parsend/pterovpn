@@ -53,7 +53,7 @@ func List() ([]Config, []string, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		if e.Name() == "metrics.json" || e.Name() == "protection.json" {
+		if e.Name() == "metrics.json" || e.Name() == "protection.json" || e.Name() == "settings.json" {
 			continue
 		}
 		c, err := Load(filepath.Join(dir, e.Name()))
@@ -122,7 +122,56 @@ func Delete(name string) error {
 	return os.Remove(path)
 }
 
-const protectionFileName = "protection.json"
+const (
+	protectionFileName = "protection.json"
+	settingsFileName   = "settings.json"
+)
+
+type ClientSettings struct {
+	Mode        string `json:"mode,omitempty"`
+	SystemProxy bool   `json:"systemProxy,omitempty"`
+	ProxyListen string `json:"proxyListen,omitempty"`
+}
+
+func LoadClientSettings() (ClientSettings, error) {
+	dir, err := Dir()
+	if err != nil {
+		return ClientSettings{}, err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, settingsFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ClientSettings{Mode: "tun", ProxyListen: "127.0.0.1:1080"}, nil
+		}
+		return ClientSettings{}, err
+	}
+	var s ClientSettings
+	if err := json.Unmarshal(b, &s); err != nil {
+		return ClientSettings{}, err
+	}
+	if s.Mode != "proxy" {
+		s.Mode = "tun"
+	}
+	if s.ProxyListen == "" {
+		s.ProxyListen = "127.0.0.1:1080"
+	}
+	return s, nil
+}
+
+func SaveClientSettings(s ClientSettings) error {
+	dir, err := Dir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, settingsFileName), b, 0600)
+}
 
 func LoadProtection() (ProtectionOptions, error) {
 	dir, err := Dir()

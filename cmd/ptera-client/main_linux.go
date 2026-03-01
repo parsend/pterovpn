@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/parsend/pterovpn/internal/netcfg"
+	"github.com/parsend/pterovpn/internal/proxy"
 	"github.com/parsend/pterovpn/internal/tun"
 	"github.com/parsend/pterovpn/internal/vpn"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
@@ -17,6 +18,15 @@ import (
 )
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
+	if opts.proxy {
+		sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		log.Printf("proxy mode: listening on %s", opts.proxyListen)
+		if onReady != nil {
+			onReady()
+		}
+		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+	}
 	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	dr, err := netcfg.GetDefaultRoute()

@@ -13,11 +13,16 @@ import (
 	"syscall"
 
 	"github.com/parsend/pterovpn/internal/netcfg"
+	"github.com/parsend/pterovpn/internal/proxy"
+	"github.com/parsend/pterovpn/internal/sysproxy"
 	"github.com/parsend/pterovpn/internal/tun"
 	"github.com/parsend/pterovpn/internal/vpn"
 )
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
+	if opts.proxy {
+		return runProxy(ctx, addrs, opts, onReady)
+	}
 	dr, err := netcfg.GetDefaultRoute()
 	if err != nil {
 		return err
@@ -95,6 +100,22 @@ func configureTunWindows(name, cidr string, _ int) error {
 	args := []string{"interface", "ipv4", "set", "address", "name=" + name, "static", ip, mask, "store=active"}
 	_, err = exec.Command("netsh", args...).CombinedOutput()
 	return err
+}
+
+func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if opts.systemProxy {
+		if err := sysproxy.Set(opts.proxyListen); err != nil {
+			return err
+		}
+		defer sysproxy.Clear()
+	}
+	log.Printf("proxy mode: listening on %s", opts.proxyListen)
+	if onReady != nil {
+		onReady()
+	}
+	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
 }
 
 func parseCIDR(cidr string) (ip, mask string, err error) {

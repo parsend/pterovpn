@@ -98,7 +98,7 @@ func classifyError(err error) string {
 	return "unknown"
 }
 
-func connectVPN(cfg config.Config, configName string, reconnectCount int) (stop func(), err error) {
+func connectVPN(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error) {
 	if cfg.Server == "" || cfg.Token == "" {
 		return nil, fmt.Errorf("server и token обязательны")
 	}
@@ -192,6 +192,9 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int) (stop 
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,
 		protection:   prot,
+		proxy:        settings.Mode == "proxy",
+		proxyListen:  settings.ProxyListen,
+		systemProxy:  settings.SystemProxy,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
