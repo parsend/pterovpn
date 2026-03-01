@@ -67,6 +67,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	addrs = netcfg.ResolveAddrs(addrs, sip)
 
 	routeCIDRs, err := netcfg.ParseCIDRs(*routes)
 	if err != nil {

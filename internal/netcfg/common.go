@@ -47,6 +47,18 @@ func ResolveHost(host string) (net.IP, error) {
 	return addrs[0], nil
 }
 
+func ResolveAddrs(addrs []string, ip net.IP) []string {
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		_, port, err := net.SplitHostPort(a)
+		if err != nil {
+			return addrs
+		}
+		out[i] = net.JoinHostPort(ip.String(), port)
+	}
+	return out
+}
+
 func SplitHostPorts(server string, portsCSV string) ([]string, error) {
 	if portsCSV == "" {
 		if _, _, err := net.SplitHostPort(server); err != nil {

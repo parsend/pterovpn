@@ -37,6 +37,7 @@ func connectVPN(cfg config.Config) (stop func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+	addrs = netcfg.ResolveAddrs(addrs, sip)
 	routeCIDRs, err := netcfg.ParseCIDRs(cfg.Routes)
 	if err != nil {
 		return nil, err
