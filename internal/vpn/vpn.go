@@ -382,17 +382,25 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		return
 	}
 
+	
+	deadline := time.Now().Add(5 * time.Minute)
+	_ = tc.SetReadDeadline(deadline)
+	_ = tc.SetWriteDeadline(deadline)
+	_ = sconn.SetReadDeadline(deadline)
+	_ = sconn.SetWriteDeadline(deadline)
+
 	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(sconn, tc)
-		_ = sconn.Close()
 		done <- struct{}{}
 	}()
 	go func() {
 		_, _ = io.Copy(tc, r)
-		_ = tc.Close()
 		done <- struct{}{}
 	}()
+	<-done
+	_ = tc.Close()
+	_ = sconn.Close()
 	<-done
 	log.Printf("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
 }

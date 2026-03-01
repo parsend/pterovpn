@@ -109,7 +109,7 @@ func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 		if n.IP.To4() == nil {
 			continue
 		}
-		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String()}
+		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "metric=1"}
 		if dr.Gateway != "" {
 			args = append(args, "nexthop="+dr.Gateway)
 		}

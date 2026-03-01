@@ -22,8 +22,12 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	if err != nil {
 		return err
 	}
-	if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
+	if opts.serverIP.To4() == nil {
+		log.Printf("warning: server %s is IPv6, bypass route not added (Windows)", opts.serverIP)
+	} else if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
 		return err
+	} else {
+		log.Printf("bypass route for %s (metric 1), dr.Dev=%q dr.Gateway=%q", opts.serverIP, dr.Dev, dr.Gateway)
 	}
 	if err := netcfg.AddExcludeRoutes(dr, opts.excludeCIDRs); err != nil {
 		return err
