@@ -42,7 +42,7 @@ func run() error {
 	)
 	flag.Parse()
 
-	if *tui {
+	if *tui || (*server == "" && *token == "") {
 		return runTUI()
 	}
 
