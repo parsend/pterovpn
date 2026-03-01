@@ -389,13 +389,16 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	_ = sconn.SetReadDeadline(deadline)
 	_ = sconn.SetWriteDeadline(deadline)
 
+	bufSize := 256 * 1024
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(sconn, tc)
+		buf := make([]byte, bufSize)
+		_, _ = io.CopyBuffer(sconn, tc, buf)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(tc, r)
+		buf := make([]byte, bufSize)
+		_, _ = io.CopyBuffer(tc, r, buf)
 		done <- struct{}{}
 	}()
 	<-done

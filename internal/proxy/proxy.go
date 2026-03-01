@@ -127,8 +127,13 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 
 	reply(client, 0)
 
-	go io.Copy(remote, client)
-	io.Copy(client, remote)
+	copyBufSize := 256 * 1024
+	go func() {
+		cb := make([]byte, copyBufSize)
+		io.CopyBuffer(remote, client, cb)
+	}()
+	cb := make([]byte, copyBufSize)
+	io.CopyBuffer(client, remote, cb)
 }
 
 func reply(c net.Conn, rep byte) {
