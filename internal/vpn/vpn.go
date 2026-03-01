@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,12 +162,13 @@ func (m *udpMux) dispatch(f protocol.UDPFrame) {
 }
 
 type udpChan struct {
-	conn net.Conn
-	r    *bufio.Reader
-	w    *bufio.Writer
-	mu   sync.Mutex
-	stop chan struct{}
-	cb   func(protocol.UDPFrame)
+	conn   net.Conn
+	r      *bufio.Reader
+	w      *bufio.Writer
+	maxPad int
+	mu     sync.Mutex
+	stop   chan struct{}
+	cb     func(protocol.UDPFrame)
 }
 
 func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
@@ -179,21 +181,24 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			last = err
 			continue
 		}
+		maxPad := 32
+		if prot != nil && prot.PadS4 > 0 && prot.PadS4 <= 64 {
+			maxPad = prot.PadS4
+		}
 		uc := &udpChan{
-			conn: c,
-			r:    bufio.NewReaderSize(c, 64*1024),
-			w:    bufio.NewWriterSize(c, 64*1024),
-			stop: make(chan struct{}),
-			cb:   cb,
+			conn:   c,
+			r:      bufio.NewReaderSize(c, 64*1024),
+			w:      bufio.NewWriterSize(c, 64*1024),
+			maxPad: maxPad,
+			stop:   make(chan struct{}),
+			cb:     cb,
 		}
 		prefixLen := 0
 		junkCount, junkMin, junkMax := 0, 64, 1024
 		if prot != nil {
-			if prot.PadS1 > 0 {
-				prefixLen = prot.PadS1
-				if prefixLen > 64 {
-					prefixLen = 64
-				}
+			prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
+			if prefixLen > 64 {
+				prefixLen = 64
 			}
 			if prot.JunkCount > 0 {
 				junkCount = prot.JunkCount
@@ -202,6 +207,12 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 				}
 				if prot.JunkMax > junkMin {
 					junkMax = prot.JunkMax
+				}
+			}
+			if strings.EqualFold(prot.Obfuscation, "enhanced") && junkCount > 0 {
+				junkCount += 3
+				if junkCount > 12 {
+					junkCount = 12
 				}
 			}
 		}
@@ -238,7 +249,7 @@ func (c *udpChan) Close() error {
 func (c *udpChan) Send(f protocol.UDPFrame) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return protocol.WriteUDPFrame(c.w, f)
+	return protocol.WriteUDPFrameWithPad(c.w, f, c.maxPad)
 }
 
 func (c *udpChan) readLoop() {
@@ -327,11 +338,9 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	w := bufio.NewWriterSize(sconn, 64*1024)
 	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
 	if h.opt.Protection != nil {
-		if h.opt.Protection.PadS1 > 0 {
-			prefixLen = h.opt.Protection.PadS1
-			if prefixLen > 64 {
-				prefixLen = 64
-			}
+		prefixLen = h.opt.Protection.PadS1 + h.opt.Protection.PadS2 + h.opt.Protection.PadS3
+		if prefixLen > 64 {
+			prefixLen = 64
 		}
 		if h.opt.Protection.JunkCount > 0 {
 			junkCount = h.opt.Protection.JunkCount
@@ -340,6 +349,12 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 			}
 			if h.opt.Protection.JunkMax > junkMin {
 				junkMax = h.opt.Protection.JunkMax
+			}
+		}
+		if strings.EqualFold(h.opt.Protection.Obfuscation, "enhanced") && junkCount > 0 {
+			junkCount += 3
+			if junkCount > 12 {
+				junkCount = 12
 			}
 		}
 	}

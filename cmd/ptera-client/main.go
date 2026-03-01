@@ -80,6 +80,7 @@ func run() error {
 		return err
 	}
 
+	prot, _ := config.LoadProtection()
 	opts := runOpts{
 		serverIP:     sip,
 		token:        *token,
@@ -88,6 +89,7 @@ func run() error {
 		mtu:          *mtu,
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,
+		protection:   &prot,
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
 }

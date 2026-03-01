@@ -264,22 +264,29 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	off += ipLen
 	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
 	off += 2
-	padLen := int(buf[len(buf)-1]) % (maxPad + 1)
-	payEnd := len(buf) - 1 - padLen
-	if payEnd < off {
-		payEnd = off
+	padLen := int(buf[len(buf)-1] & 0xff)
+	if padLen > 64 || len(buf)-1-padLen < off {
+		return UDPFrame{}, errors.New("bad pad len")
 	}
+	payEnd := len(buf) - 1 - padLen
 	payload := make([]byte, payEnd-off)
 	copy(payload, buf[off:payEnd])
 	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
 }
 
 func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
+	return WriteUDPFrameWithPad(w, f, maxPad)
+}
+
+func WriteUDPFrameWithPad(w *bufio.Writer, f UDPFrame, maxPadVal int) error {
+	if maxPadVal <= 0 || maxPadVal > 64 {
+		maxPadVal = maxPad
+	}
 	at, ipb, err := normalizeIP(f.DstIP)
 	if err != nil {
 		return err
 	}
-	padLen := randPadLen()
+	padLen := randPadLenN(maxPadVal)
 	ipLen := len(ipb)
 	flen := 1 + 1 + 2 + ipLen + 2 + len(f.Payload) + padLen + 1
 	if err := writeU32(w, uint32(flen)); err != nil {
@@ -315,7 +322,14 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 }
 
 func randPadLen() int {
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(maxPad+1)))
+	return randPadLenN(maxPad)
+}
+
+func randPadLenN(m int) int {
+	if m <= 0 {
+		return 0
+	}
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(m+1)))
 	return int(n.Int64())
 }
 

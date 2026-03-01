@@ -101,9 +101,9 @@ final class Protocol {
     InetAddress dst = InetAddress.getByAddress(ipb);
     int dstPort = ((buf[off] & 0xff) << 8) | (buf[off + 1] & 0xff);
     off += 2;
-    int padLen = (buf[buf.length - 1] & 0xff) % (MAX_PAD + 1);
+    int padLen = buf[buf.length - 1] & 0xff;
+    if (padLen > 64 || buf.length - 1 - padLen < off) throw new IOException("bad pad len");
     int payEnd = buf.length - 1 - padLen;
-    if (payEnd < off) payEnd = off;
     byte[] payload = new byte[payEnd - off];
     System.arraycopy(buf, off, payload, 0, payload.length);
     return new UdpFrame(at, srcPort, dst, dstPort, payload);

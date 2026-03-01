@@ -168,6 +168,21 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int) (stop 
 		p, _ := config.LoadProtection()
 		prot = &p
 	}
+	if prot != nil && prot.PreCheck && len(addrs) > 0 {
+		ok, err := probe.ProbePterovpn(addrs[0], probeTimeout)
+		if err != nil || !ok {
+			record.ErrorType = "preCheck"
+			record.End = time.Now()
+			record.Duration = time.Since(start)
+			if store, _ := metrics.Load(); store != nil {
+				_ = store.Append(record)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("preCheck: %w", err)
+			}
+			return nil, errors.New("preCheck: server is not pterovpn")
+		}
+	}
 	opts := runOpts{
 		serverIP:     sip,
 		token:        cfg.Token,
