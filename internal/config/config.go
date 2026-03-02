@@ -25,6 +25,9 @@ type ProtectionOptions struct {
 	PadS3       int    `json:"padS3,omitempty"`
 	PadS4       int    `json:"padS4,omitempty"`
 	PreCheck    bool   `json:"preCheck,omitempty"`
+	MagicSplit  string `json:"magicSplit,omitempty"`   // "2,3" etc, sum=5
+	JunkStyle   string `json:"junkStyle,omitempty"`    // "random"|"tls"
+	FlushPolicy string `json:"flushPolicy,omitempty"`  // "once"|"perChunk"
 }
 
 func Dir() (string, error) {

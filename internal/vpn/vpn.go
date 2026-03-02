@@ -239,10 +239,17 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			junkCount, junkMin, junkMax = 2, 64, 512
 		}
 		junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-		if err := protocol.WriteJunkWithSlotFlush(uc.w, junkCount, junkMin, junkMax, slot); err != nil {
+		junkStyle, flushPolicy := "", ""
+		if prot != nil {
+			junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
+		}
+		if err := protocol.WriteJunkOrTLSLike(uc.w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = uc.w.Flush() }); err != nil {
 			_ = c.Close()
 			last = err
 			continue
+		}
+		if !strings.EqualFold(flushPolicy, "perChunk") {
+			_ = uc.w.Flush()
 		}
 		var optsJSON []byte
 		if prot != nil {
@@ -382,7 +389,21 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 			}
 		}
 	}
-	_ = protocol.WriteJunkWithSlotFlush(w, junkCount, junkMin, junkMax, slot)
+	if junkCount == 0 {
+		junkCount, junkMin, junkMax = 2, 64, 512
+	}
+	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
+	junkStyle, flushPolicy := "", ""
+	if h.opt.Protection != nil {
+		junkStyle, flushPolicy = h.opt.Protection.JunkStyle, h.opt.Protection.FlushPolicy
+	}
+	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
+		log.Printf("vpn: junk write failed: %v", err)
+		return
+	}
+	if !strings.EqualFold(flushPolicy, "perChunk") {
+		_ = w.Flush()
+	}
 	var optsJSON []byte
 	if h.opt.Protection != nil {
 		optsJSON, _ = json.Marshal(h.opt.Protection)

@@ -52,7 +52,17 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 		junkCount, junkMin, junkMax = 2, 64, 512
 	}
 	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-	_ = protocol.WriteJunkWithSlotFlush(w, junkCount, junkMin, junkMax, slot)
+	junkStyle, flushPolicy := "", ""
+	if prot != nil {
+		junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
+	}
+	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if !strings.EqualFold(flushPolicy, "perChunk") {
+		_ = w.Flush()
+	}
 	var optsJSON []byte
 	if prot != nil {
 		optsJSON, _ = json.Marshal(prot)

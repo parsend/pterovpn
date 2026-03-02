@@ -351,6 +351,18 @@ func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
 	if obf == "" {
 		obf = "default"
 	}
+	magicSplit := opts.MagicSplit
+	if magicSplit == "" {
+		magicSplit = "0"
+	}
+	junkStyle := opts.JunkStyle
+	if junkStyle == "" {
+		junkStyle = "random"
+	}
+	flushPolicy := opts.FlushPolicy
+	if flushPolicy == "" {
+		flushPolicy = "once"
+	}
 	return []textinput.Model{
 		ti("default|enhanced", obf),
 		ti("0-12", strconv.Itoa(opts.JunkCount)),
@@ -361,6 +373,9 @@ func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
 		ti("0-64", strconv.Itoa(opts.PadS3)),
 		ti("0-64", strconv.Itoa(opts.PadS4)),
 		ti("true|false", strconv.FormatBool(opts.PreCheck)),
+		ti("2,3 or 0", magicSplit),
+		ti("random|tls", junkStyle),
+		ti("once|perChunk", flushPolicy),
 	}
 }
 
@@ -417,6 +432,23 @@ func protectionOptsFromInputs(inputs []textinput.Model) config.ProtectionOptions
 	if obf != "enhanced" && obf != "default" {
 		obf = "default"
 	}
+	magicSplit, junkStyle, flushPolicy := "", "random", "once"
+	if len(inputs) >= 12 {
+		magicSplit = strings.TrimSpace(inputs[9].Value())
+		if magicSplit == "0" {
+			magicSplit = ""
+		}
+		junkStyle = strings.ToLower(strings.TrimSpace(inputs[10].Value()))
+		if junkStyle != "tls" {
+			junkStyle = "random"
+		}
+		flushPolicy = strings.ToLower(strings.TrimSpace(inputs[11].Value()))
+	}
+	if flushPolicy == "perchunk" {
+		flushPolicy = "perChunk"
+	} else {
+		flushPolicy = "once"
+	}
 	return config.ProtectionOptions{
 		Obfuscation: obf,
 		JunkCount:   clamp(atoi(inputs[1].Value()), 0, 12),
@@ -427,6 +459,9 @@ func protectionOptsFromInputs(inputs []textinput.Model) config.ProtectionOptions
 		PadS3:       clamp(atoi(inputs[6].Value()), 0, 64),
 		PadS4:       clamp(atoi(inputs[7].Value()), 0, 64),
 		PreCheck:    strings.ToLower(strings.TrimSpace(inputs[8].Value())) == "true",
+		MagicSplit:  magicSplit,
+		JunkStyle:   junkStyle,
+		FlushPolicy: flushPolicy,
 	}
 }
 
@@ -770,8 +805,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.protectionEditing && len(m.protectionInputs) == 9 {
-				m.protectionFormFocus = (m.protectionFormFocus + 1) % 9
+			if m.protectionEditing && len(m.protectionInputs) == 12 {
+				m.protectionFormFocus = (m.protectionFormFocus + 1) % 12
 				for i := range m.protectionInputs {
 					if i == m.protectionFormFocus {
 						m.protectionInputs[i].Focus()
@@ -826,8 +861,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.protectionEditing && len(m.protectionInputs) == 9 {
-				m.protectionFormFocus = (m.protectionFormFocus + 8) % 9
+			if m.protectionEditing && len(m.protectionInputs) == 12 {
+				m.protectionFormFocus = (m.protectionFormFocus + 11) % 12
 				for i := range m.protectionInputs {
 					if i == m.protectionFormFocus {
 						m.protectionInputs[i].Focus()
@@ -875,7 +910,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settingsFormFocus = 0
 				return m, nil
 			}
-			if m.protectionEditing && len(m.protectionInputs) == 9 {
+			if m.protectionEditing && len(m.protectionInputs) == 12 {
 				opts := protectionOptsFromInputs(m.protectionInputs)
 				if m.protectionTarget == "" {
 					_ = config.SaveProtection(opts)
@@ -1189,8 +1224,8 @@ func (m Model) protectionView() string {
 
 	b.WriteString("\n")
 	b.WriteString(sectionTitle.Render("Настройки защиты") + "\n")
-	if m.protectionEditing && len(m.protectionInputs) == 9 {
-		labels := []string{"obfuscation", "junkCount", "junkMin", "junkMax", "padS1", "padS2", "padS3", "padS4", "preCheck"}
+	if m.protectionEditing && len(m.protectionInputs) == 12 {
+		labels := []string{"obfuscation", "junkCount", "junkMin", "junkMax", "padS1", "padS2", "padS3", "padS4", "preCheck", "magicSplit", "junkStyle", "flushPolicy"}
 		for i := range m.protectionInputs {
 			b.WriteString("  ")
 			b.WriteString(kvLabel.Render(labels[i]+":") + " ")
@@ -1231,6 +1266,13 @@ func (m Model) protectionView() string {
 		b.WriteString(kvLabel.Render("preCheck:") + " ")
 		b.WriteString(kvValue.Render(fmt.Sprintf("%v", opts.PreCheck)) + "\n")
 		b.WriteString("  ")
+		b.WriteString(kvLabel.Render("magicSplit:") + " ")
+		b.WriteString(kvValue.Render(orEmpty(opts.MagicSplit, "0")) + "   ")
+		b.WriteString(kvLabel.Render("junkStyle:") + " ")
+		b.WriteString(kvValue.Render(orEmpty(opts.JunkStyle, "random")) + "   ")
+		b.WriteString(kvLabel.Render("flushPolicy:") + " ")
+		b.WriteString(kvValue.Render(orEmpty(opts.FlushPolicy, "once")) + "\n")
+		b.WriteString("  ")
 		b.WriteString(hintKey.Render("E") + " ")
 		b.WriteString(hintText.Render("редактировать") + "\n")
 	}
@@ -1253,6 +1295,13 @@ func (m Model) protectionView() string {
 	full := b.String()
 	m.protectionViewport.SetContent(full)
 	return m.protectionViewport.View()
+}
+
+func orEmpty(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func formatRTT(d time.Duration) string {

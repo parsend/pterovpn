@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"math/big"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -104,74 +107,68 @@ func ApplyTimeVariation(count, min, max int, slot int64) (int, int, int) {
 	return count, min, max
 }
 
-func WriteJunk(w io.Writer, count, min, max int) error {
-	return WriteJunkWithSlot(w, count, min, max, 0)
-}
-
-func WriteJunkWithSlot(w io.Writer, count, min, max int, slot int64) error {
-	return writeJunkInternal(w, count, min, max, slot, nil)
-}
-
-func WriteJunkWithSlotFlush(w *bufio.Writer, count, min, max int, slot int64) error {
-	return writeJunkInternal(w, count, min, max, slot, w)
-}
-
-type flushWriter interface {
-	Flush() error
-}
-
-func writeJunkInternal(w io.Writer, count, min, max int, slot int64, flusher flushWriter) error {
-	if slot != 0 {
-		count, min, max = ApplyTimeVariation(count, min, max, slot)
-	}
+func WriteJunk(w io.Writer, count, min, max int, flushAfterChunk func()) error {
 	if count <= 0 || min <= 0 || max < min {
 		return nil
 	}
-	maxCap := 1024
-	if slot != 0 {
-		maxCap = 2048
-	}
-	if max > maxCap {
-		max = maxCap
+	if max > 1024 {
+		max = 1024
 	}
 	if min > max {
 		min = max
 	}
-	buf := make([]byte, max+8)
-	s := int(slot)
+	buf := make([]byte, max)
 	for i := 0; i < count; i++ {
-		tlsLike := (s+i)%2 == 0
-		var sz int
-		if tlsLike {
-			n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
-			sz = min + int(n.Int64())
-			if sz > 1500 {
-				sz = 1500
-			}
-			buf[0] = 0x16
-			buf[1] = 0x03
-			buf[2] = 0x03
-			payLen := sz - 5
-			if payLen < 0 {
-				payLen = 0
-			}
-			buf[3] = byte(payLen >> 8)
-			buf[4] = byte(payLen & 0xff)
-			if payLen > 0 {
-				_, _ = rand.Read(buf[5:sz])
-			}
-		} else {
-			n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
-			sz = min + int(n.Int64())
-			_, _ = rand.Read(buf[:sz])
-		}
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
+		sz := min + int(n.Int64())
+		_, _ = rand.Read(buf[:sz])
 		if _, err := w.Write(buf[:sz]); err != nil {
 			return err
 		}
-		if flusher != nil {
-			if err := flusher.Flush(); err != nil {
-				return err
-			}
+		if flushAfterChunk != nil {
+			flushAfterChunk()
+		}
+	}
+	return nil
+}
+
+func WriteJunkOrTLSLike(w io.Writer, count, min, max int, junkStyle, flushPolicy string, flush func()) error {
+	var fc func()
+	if flush != nil && strings.EqualFold(flushPolicy, "perChunk") {
+		fc = flush
+	}
+	if strings.EqualFold(junkStyle, "tls") {
+		return WriteTLSLikeJunk(w, count, min, max, fc)
+	}
+	return WriteJunk(w, count, min, max, fc)
+}
+
+func WriteTLSLikeJunk(w io.Writer, count, minLen, maxLen int, flushAfterChunk func()) error {
+	if count <= 0 || minLen <= 0 || maxLen < minLen {
+		return nil
+	}
+	if maxLen > 1024 {
+		maxLen = 1024
+	}
+	if minLen > maxLen {
+		minLen = maxLen
+	}
+	payload := make([]byte, maxLen)
+	for i := 0; i < count; i++ {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(maxLen-minLen+1)))
+		payloadLen := minLen + int(n.Int64())
+		header := [5]byte{0x16, 0x03, 0x01, byte(payloadLen >> 8), byte(payloadLen)}
+		if _, err := w.Write(header[:]); err != nil {
+			return err
+		}
+		if _, err := rand.Read(payload[:payloadLen]); err != nil {
+			return err
+		}
+		if _, err := w.Write(payload[:payloadLen]); err != nil {
+			return err
+		}
+		if flushAfterChunk != nil {
+			flushAfterChunk()
 		}
 	}
 	return nil
@@ -183,6 +180,36 @@ func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) er
 
 func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {
 	return WriteHandshakeWithPrefixAndOpts(w, role, channelID, token, prefixLen, nil)
+}
+
+type handshakeOpts struct {
+	MagicSplit string `json:"magicSplit,omitempty"`
+}
+
+func parseMagicSplit(s string) []int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	var lens []int
+	sum := 0
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return nil
+		}
+		lens = append(lens, n)
+		sum += n
+	}
+	if sum != 5 {
+		return nil
+	}
+	return lens
 }
 
 func WriteHandshakeWithPrefixAndOpts(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int, optsJSON []byte) error {
@@ -204,16 +231,29 @@ func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID b
 			}
 		}
 	}
-	if slot != 0 {
-		split := 2 + int(slot%2)
-		if _, err := w.Write(magic[:split]); err != nil {
-			return err
+	var opts handshakeOpts
+	if len(optsJSON) > 0 && len(optsJSON) <= maxOptsLen {
+		_ = json.Unmarshal(optsJSON, &opts)
+	}
+	splits := parseMagicSplit(opts.MagicSplit)
+	if len(splits) > 0 {
+		off := 0
+		for _, n := range splits {
+			if off+n > len(magic) {
+				break
+			}
+			if _, err := w.Write(magic[off : off+n]); err != nil {
+				return err
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			off += n
 		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
-		if _, err := w.Write(magic[split:]); err != nil {
-			return err
+		if off < len(magic) {
+			if _, err := w.Write(magic[off:]); err != nil {
+				return err
+			}
 		}
 	} else {
 		if _, err := w.Write(magic); err != nil {

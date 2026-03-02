@@ -137,7 +137,7 @@ func TestWriteHandshakeTokenTooLong(t *testing.T) {
 
 func TestWriteJunk(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunk(&buf, 3, 4, 8); err != nil {
+	if err := WriteJunk(&buf, 3, 4, 8, nil); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 12 {
@@ -147,7 +147,7 @@ func TestWriteJunk(t *testing.T) {
 
 func TestWriteJunkZero(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunk(&buf, 0, 4, 8); err != nil {
+	if err := WriteJunk(&buf, 0, 4, 8, nil); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() != 0 {
@@ -178,7 +178,7 @@ func TestApplyTimeVariation(t *testing.T) {
 
 func TestWriteJunkWithSlot(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunkWithSlot(&buf, 2, 64, 256, 42); err != nil {
+	if err := WriteJunk(&buf, 2, 64, 256, nil); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 128 {
@@ -189,7 +189,7 @@ func TestWriteJunkWithSlot(t *testing.T) {
 func TestJunkThenHandshake(t *testing.T) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	_ = WriteJunkWithSlot(w, 2, 64, 256, 999)
+	_ = WriteJunk(w, 2, 64, 256, nil)
 	_ = WriteHandshake(w, RoleTCP(), 0, "t")
 	r := bufio.NewReader(&buf)
 	if err := SkipUntilMagic(r); err != nil {
@@ -256,44 +256,6 @@ func TestWriteHandshakeWithOpts(t *testing.T) {
 	}
 }
 
-func TestWriteTLSLikeJunk(t *testing.T) {
-	var buf bytes.Buffer
-	w := bufio.NewWriter(&buf)
-	if err := WriteJunkWithSlotFlush(w, 3, 100, 500, 1); err != nil {
-		t.Fatal(err)
-	}
-	b := buf.Bytes()
-	if len(b) < 15 {
-		t.Fatalf("expected junk, got len=%d", len(b))
-	}
-	foundTLS := false
-	for i := 0; i < len(b)-2; i++ {
-		if b[i] == 0x16 && b[i+1] == 0x03 && b[i+2] == 0x03 {
-			foundTLS = true
-			break
-		}
-	}
-	if !foundTLS {
-		t.Error("expected TLS-like header 0x16 0x03 0x03 in junk")
-	}
-}
-
-func TestMagicSplitRoundtrip(t *testing.T) {
-	var buf bytes.Buffer
-	w := bufio.NewWriter(&buf)
-	if err := WriteHandshakeWithPrefixAndOptsSlot(w, RoleTCP(), 0, "split", 0, nil, 1); err != nil {
-		t.Fatal(err)
-	}
-	r := bufio.NewReader(&buf)
-	hs, err := ReadHandshake(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hs.Token != "split" || hs.Role != RoleTCP() {
-		t.Errorf("got %+v", hs)
-	}
-}
-
 func TestBufSizeForConn(t *testing.T) {
 	s := BufSizeForConn(0)
 	if s < 4*1024 || s > 16*1024 {
@@ -305,5 +267,90 @@ func TestCopyBufSize(t *testing.T) {
 	s := CopyBufSize(0)
 	if s < 64*1024 || s > 256*1024 {
 		t.Errorf("CopyBufSize(0)=%d", s)
+	}
+}
+
+func TestMagicSplit(t *testing.T) {
+	for _, tc := range []struct {
+		split string
+		valid bool
+	}{
+		{"2,3", true},
+		{"1,2,2", true},
+		{"5", true},
+		{"0", false},
+		{"1,4", true},
+		{"3,2", true},
+		{"1,1,1,1,1", true},
+		{"2,2", false},
+		{"6", false},
+	} {
+		splits := parseMagicSplit(tc.split)
+		valid := len(splits) > 0
+		if valid != tc.valid {
+			t.Errorf("split %q: valid=%v want %v, splits=%v", tc.split, valid, tc.valid, splits)
+		}
+	}
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	opts := []byte(`{"magicSplit":"2,3"}`)
+	if err := WriteHandshakeWithPrefixAndOpts(w, RoleTCP(), 0, "x", 0, opts); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(&buf)
+	if err := SkipUntilMagic(r); err != nil {
+		t.Fatal(err)
+	}
+	hs, err := readHandshakeBody(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Token != "x" {
+		t.Errorf("got token %q", hs.Token)
+	}
+}
+
+func TestTLSLikeJunk(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteTLSLikeJunk(&buf, 2, 10, 50, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	if len(b) < 2*5+2*10 {
+		t.Errorf("too short: %d", len(b))
+	}
+	i := 0
+	for j := 0; j < 2; j++ {
+		if b[i] != 0x16 || b[i+1] != 0x03 || b[i+2] != 0x01 {
+			t.Errorf("chunk %d: bad TLS header: %02x %02x %02x", j, b[i], b[i+1], b[i+2])
+		}
+		plen := int(b[i+3])<<8 | int(b[i+4])
+		if plen < 10 || plen > 50 {
+			t.Errorf("chunk %d: payload len %d", j, plen)
+		}
+		i += 5 + plen
+	}
+}
+
+func TestJunkThenHandshakeWithTLSJunk(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := WriteTLSLikeJunk(w, 1, 20, 30, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Flush()
+	if err := WriteHandshakeWithPrefixAndOpts(w, RoleUDP(), 0, "tls", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(&buf)
+	if err := SkipUntilMagic(r); err != nil {
+		t.Fatal(err)
+	}
+	hs, err := readHandshakeBody(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Token != "tls" {
+		t.Errorf("got token %q", hs.Token)
 	}
 }
