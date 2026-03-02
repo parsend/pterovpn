@@ -194,10 +194,16 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 		if prot != nil && prot.PadS4 > 0 && prot.PadS4 <= 64 {
 			maxPad = prot.PadS4
 		}
+		slot := protocol.TimeSlot()
+		maxPad += int(slot % 16)
+		if maxPad > 64 {
+			maxPad = 64
+		}
+		bufSize := protocol.BufSizeForConn(slot)
 		uc := &udpChan{
 			conn:   c,
-			r:      bufio.NewReaderSize(c, 64*1024),
-			w:      bufio.NewWriterSize(c, 64*1024),
+			r:      bufio.NewReaderSize(c, bufSize),
+			w:      bufio.NewWriterSize(c, bufSize),
 			maxPad: maxPad,
 			stop:   make(chan struct{}),
 			cb:     cb,
@@ -206,6 +212,10 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 		junkCount, junkMin, junkMax := 0, 64, 1024
 		if prot != nil {
 			prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
+			if prefixLen > 64 {
+				prefixLen = 64
+			}
+			prefixLen += int(slot % 8)
 			if prefixLen > 64 {
 				prefixLen = 64
 			}
@@ -225,17 +235,20 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 				}
 			}
 		}
-		if err := protocol.WriteJunk(uc.w, junkCount, junkMin, junkMax); err != nil {
+		if junkCount == 0 {
+			junkCount, junkMin, junkMax = 2, 64, 512
+		}
+		junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
+		if err := protocol.WriteJunkWithSlotFlush(uc.w, junkCount, junkMin, junkMax, slot); err != nil {
 			_ = c.Close()
 			last = err
 			continue
 		}
-		_ = uc.w.Flush()
 		var optsJSON []byte
 		if prot != nil {
 			optsJSON, _ = json.Marshal(prot)
 		}
-		if err := protocol.WriteHandshakeWithPrefixAndOpts(uc.w, protocol.RoleUDP(), id, token, prefixLen, optsJSON); err != nil {
+		if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(uc.w, protocol.RoleUDP(), id, token, prefixLen, optsJSON, slot); err != nil {
 			_ = c.Close()
 			last = err
 			continue
@@ -343,8 +356,10 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	}
 	defer sconn.Close()
 
-	r := bufio.NewReaderSize(sconn, 64*1024)
-	w := bufio.NewWriterSize(sconn, 64*1024)
+	slot := protocol.TimeSlot()
+	bufSize := protocol.BufSizeForConn(slot)
+	r := bufio.NewReaderSize(sconn, bufSize)
+	w := bufio.NewWriterSize(sconn, bufSize)
 	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
 	if h.opt.Protection != nil {
 		prefixLen = h.opt.Protection.PadS1 + h.opt.Protection.PadS2 + h.opt.Protection.PadS3
@@ -367,13 +382,12 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 			}
 		}
 	}
-	_ = protocol.WriteJunk(w, junkCount, junkMin, junkMax)
-	_ = w.Flush()
+	_ = protocol.WriteJunkWithSlotFlush(w, junkCount, junkMin, junkMax, slot)
 	var optsJSON []byte
 	if h.opt.Protection != nil {
 		optsJSON, _ = json.Marshal(h.opt.Protection)
 	}
-	if err := protocol.WriteHandshakeWithPrefixAndOpts(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON); err != nil {
+	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON, slot); err != nil {
 		log.Printf("vpn: tcp handshake failed: %v", err)
 		return
 	}
@@ -389,15 +403,15 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	_ = sconn.SetReadDeadline(deadline)
 	_ = sconn.SetWriteDeadline(deadline)
 
-	bufSize := 256 * 1024
+	copyBufSize := protocol.CopyBufSize(slot)
 	done := make(chan struct{}, 2)
 	go func() {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, copyBufSize)
 		_, _ = io.CopyBuffer(sconn, tc, buf)
 		done <- struct{}{}
 	}()
 	go func() {
-		buf := make([]byte, bufSize)
+		buf := make([]byte, copyBufSize)
 		_, _ = io.CopyBuffer(tc, r, buf)
 		done <- struct{}{}
 	}()

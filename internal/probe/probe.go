@@ -49,6 +49,10 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 	r := bufio.NewReader(wrapped)
 	w := bufio.NewWriter(wrapped)
 
+	slot := protocol.TimeSlot()
+	junkCount, junkMin, junkMax := 2, 64, 512
+	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
+	_ = protocol.WriteJunkWithSlotFlush(w, junkCount, junkMin, junkMax, slot)
 	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, badToken); err != nil {
 		log.Printf("probe: handshake write: %v", err)
 		return false, err

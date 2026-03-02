@@ -1,6 +1,5 @@
 listenPorts=5555
 token=your-secret-key
 udpChannels=4
-# public host for connection string (host:port:key), optional
 publicHost=1.2.3.4
-# debug=true to enable logs
+debug=false

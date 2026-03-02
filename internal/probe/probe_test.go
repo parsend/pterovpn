@@ -79,9 +79,13 @@ func TestProbePterovpnCloseOnBadToken(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		buf := make([]byte, 1024)
-		_, _ = c.Read(buf)
-		c.Close()
+		buf := make([]byte, 4096)
+		for {
+			_, err := c.Read(buf)
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	ok, err := ProbePterovpn(l.Addr().String(), time.Second)
@@ -109,7 +113,7 @@ func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
 		defer c.Close()
 		wrapped := obfuscate.WrapConn(c, serverToken)
 		r := bufio.NewReader(wrapped)
-		_, err = protocol.ReadHandshake(r)
+		_, err = protocol.ReadHandshakeAfterSkip(r)
 		if err != nil {
 			c.Close()
 			return

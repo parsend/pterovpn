@@ -155,6 +155,55 @@ func TestWriteJunkZero(t *testing.T) {
 	}
 }
 
+func TestTimeSlot(t *testing.T) {
+	s := TimeSlot()
+	if s <= 0 {
+		t.Errorf("slot=%d", s)
+	}
+}
+
+func TestApplyTimeVariation(t *testing.T) {
+	c, mn, mx := ApplyTimeVariation(3, 64, 512, 0)
+	if c != 3 || mn != 64 || mx != 512 {
+		t.Errorf("slot=0 should pass through: %d %d %d", c, mn, mx)
+	}
+	c, mn, mx = ApplyTimeVariation(3, 64, 512, 1)
+	if c == 3 && mn == 64 && mx == 512 {
+		t.Errorf("slot>0 should vary: %d %d %d", c, mn, mx)
+	}
+	if c < 1 || c > 16 || mn < 64 || mx < mn {
+		t.Errorf("bounds violated: %d %d %d", c, mn, mx)
+	}
+}
+
+func TestWriteJunkWithSlot(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteJunkWithSlot(&buf, 2, 64, 256, 42); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() < 128 {
+		t.Errorf("buf len=%d", buf.Len())
+	}
+}
+
+func TestJunkThenHandshake(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	_ = WriteJunkWithSlot(w, 2, 64, 256, 999)
+	_ = WriteHandshake(w, RoleTCP(), 0, "t")
+	r := bufio.NewReader(&buf)
+	if err := SkipUntilMagic(r); err != nil {
+		t.Fatal(err)
+	}
+	hs, err := readHandshakeBody(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Token != "t" || hs.Role != RoleTCP() {
+		t.Errorf("got %+v", hs)
+	}
+}
+
 func TestSkipUntilMagic(t *testing.T) {
 	pad := []byte{0x00, 0x01, 0x02, 0x03}
 	body := append(magic, version, RoleTCP(), 0, 1, 'x')
@@ -204,5 +253,57 @@ func TestWriteHandshakeWithOpts(t *testing.T) {
 	}
 	if hs.Token != "t" || hs.ChannelID != 1 {
 		t.Errorf("got %+v", hs)
+	}
+}
+
+func TestWriteTLSLikeJunk(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := WriteJunkWithSlotFlush(w, 3, 100, 500, 1); err != nil {
+		t.Fatal(err)
+	}
+	b := buf.Bytes()
+	if len(b) < 15 {
+		t.Fatalf("expected junk, got len=%d", len(b))
+	}
+	foundTLS := false
+	for i := 0; i < len(b)-2; i++ {
+		if b[i] == 0x16 && b[i+1] == 0x03 && b[i+2] == 0x03 {
+			foundTLS = true
+			break
+		}
+	}
+	if !foundTLS {
+		t.Error("expected TLS-like header 0x16 0x03 0x03 in junk")
+	}
+}
+
+func TestMagicSplitRoundtrip(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := WriteHandshakeWithPrefixAndOptsSlot(w, RoleTCP(), 0, "split", 0, nil, 1); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(&buf)
+	hs, err := ReadHandshake(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Token != "split" || hs.Role != RoleTCP() {
+		t.Errorf("got %+v", hs)
+	}
+}
+
+func TestBufSizeForConn(t *testing.T) {
+	s := BufSizeForConn(0)
+	if s < 4*1024 || s > 16*1024 {
+		t.Errorf("BufSizeForConn(0)=%d", s)
+	}
+}
+
+func TestCopyBufSize(t *testing.T) {
+	s := CopyBufSize(0)
+	if s < 64*1024 || s > 256*1024 {
+		t.Errorf("CopyBufSize(0)=%d", s)
 	}
 }

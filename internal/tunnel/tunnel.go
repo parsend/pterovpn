@@ -18,11 +18,17 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 	if err != nil {
 		return nil, err
 	}
-	r := bufio.NewReaderSize(c, 64*1024)
-	w := bufio.NewWriterSize(c, 64*1024)
+	slot := protocol.TimeSlot()
+	bufSize := protocol.BufSizeForConn(slot)
+	r := bufio.NewReaderSize(c, bufSize)
+	w := bufio.NewWriterSize(c, bufSize)
 	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
 	if prot != nil {
 		prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
+		if prefixLen > 64 {
+			prefixLen = 64
+		}
+		prefixLen += int(slot % 8)
 		if prefixLen > 64 {
 			prefixLen = 64
 		}
@@ -42,13 +48,16 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 			}
 		}
 	}
-	_ = protocol.WriteJunk(w, junkCount, junkMin, junkMax)
-	_ = w.Flush()
+	if junkCount == 0 {
+		junkCount, junkMin, junkMax = 2, 64, 512
+	}
+	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
+	_ = protocol.WriteJunkWithSlotFlush(w, junkCount, junkMin, junkMax, slot)
 	var optsJSON []byte
 	if prot != nil {
 		optsJSON, _ = json.Marshal(prot)
 	}
-	if err := protocol.WriteHandshakeWithPrefixAndOpts(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON); err != nil {
+	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot); err != nil {
 		c.Close()
 		return nil, err
 	}

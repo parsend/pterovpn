@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"time"
 )
 
 const maxOptsLen = 512
@@ -57,23 +58,120 @@ func readByte(r io.Reader) (byte, error) {
 	return b[0], err
 }
 
+const slotSec = 120
+
+func TimeSlot() int64 {
+	return time.Now().Unix() / slotSec
+}
+
+func BufSizeForConn(slot int64) int {
+	if slot <= 0 {
+		slot = TimeSlot()
+	}
+	return 4*1024 + int(slot%13)*1024
+}
+
+func CopyBufSize(slot int64) int {
+	if slot <= 0 {
+		slot = TimeSlot()
+	}
+	return 64*1024 + int(slot%4)*64*1024
+}
+
+func ApplyTimeVariation(count, min, max int, slot int64) (int, int, int) {
+	if slot <= 0 {
+		return count, min, max
+	}
+	s := int(slot)
+	count = count + (s % 5)
+	if count < 1 {
+		count = 1
+	}
+	if count > 16 {
+		count = 16
+	}
+	min = min + (s%16)*8
+	if min < 64 {
+		min = 64
+	}
+	max = max + (s%32)*32
+	if max < min {
+		max = min + 256
+	}
+	if max > 2048 {
+		max = 2048
+	}
+	return count, min, max
+}
+
 func WriteJunk(w io.Writer, count, min, max int) error {
+	return WriteJunkWithSlot(w, count, min, max, 0)
+}
+
+func WriteJunkWithSlot(w io.Writer, count, min, max int, slot int64) error {
+	return writeJunkInternal(w, count, min, max, slot, nil)
+}
+
+func WriteJunkWithSlotFlush(w *bufio.Writer, count, min, max int, slot int64) error {
+	return writeJunkInternal(w, count, min, max, slot, w)
+}
+
+type flushWriter interface {
+	Flush() error
+}
+
+func writeJunkInternal(w io.Writer, count, min, max int, slot int64, flusher flushWriter) error {
+	if slot != 0 {
+		count, min, max = ApplyTimeVariation(count, min, max, slot)
+	}
 	if count <= 0 || min <= 0 || max < min {
 		return nil
 	}
-	if max > 1024 {
-		max = 1024
+	maxCap := 1024
+	if slot != 0 {
+		maxCap = 2048
+	}
+	if max > maxCap {
+		max = maxCap
 	}
 	if min > max {
 		min = max
 	}
-	buf := make([]byte, max)
+	buf := make([]byte, max+8)
+	s := int(slot)
 	for i := 0; i < count; i++ {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
-		sz := min + int(n.Int64())
-		_, _ = rand.Read(buf[:sz])
+		tlsLike := (s+i)%2 == 0
+		var sz int
+		if tlsLike {
+			n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
+			sz = min + int(n.Int64())
+			if sz > 1500 {
+				sz = 1500
+			}
+			buf[0] = 0x16
+			buf[1] = 0x03
+			buf[2] = 0x03
+			payLen := sz - 5
+			if payLen < 0 {
+				payLen = 0
+			}
+			buf[3] = byte(payLen >> 8)
+			buf[4] = byte(payLen & 0xff)
+			if payLen > 0 {
+				_, _ = rand.Read(buf[5:sz])
+			}
+		} else {
+			n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
+			sz = min + int(n.Int64())
+			_, _ = rand.Read(buf[:sz])
+		}
 		if _, err := w.Write(buf[:sz]); err != nil {
 			return err
+		}
+		if flusher != nil {
+			if err := flusher.Flush(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -88,6 +186,10 @@ func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token 
 }
 
 func WriteHandshakeWithPrefixAndOpts(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int, optsJSON []byte) error {
+	return WriteHandshakeWithPrefixAndOptsSlot(w, role, channelID, token, prefixLen, optsJSON, 0)
+}
+
+func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int, optsJSON []byte, slot int64) error {
 	if prefixLen > maxPrefixLen {
 		prefixLen = maxPrefixLen
 	}
@@ -102,8 +204,21 @@ func WriteHandshakeWithPrefixAndOpts(w *bufio.Writer, role byte, channelID byte,
 			}
 		}
 	}
-	if _, err := w.Write(magic); err != nil {
-		return err
+	if slot != 0 {
+		split := 2 + int(slot%2)
+		if _, err := w.Write(magic[:split]); err != nil {
+			return err
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		if _, err := w.Write(magic[split:]); err != nil {
+			return err
+		}
+	} else {
+		if _, err := w.Write(magic); err != nil {
+			return err
+		}
 	}
 	if err := w.WriteByte(version); err != nil {
 		return err
@@ -145,6 +260,13 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 		if got[i] != magic[i] {
 			return Handshake{}, errors.New("bad magic")
 		}
+	}
+	return readHandshakeBody(r)
+}
+
+func ReadHandshakeAfterSkip(r *bufio.Reader) (Handshake, error) {
+	if err := SkipUntilMagic(r); err != nil {
+		return Handshake{}, err
 	}
 	return readHandshakeBody(r)
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/parsend/pterovpn/internal/config"
+	"github.com/parsend/pterovpn/internal/protocol"
 	"github.com/parsend/pterovpn/internal/tunnel"
 )
 
@@ -127,7 +128,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 
 	reply(client, 0)
 
-	copyBufSize := 256 * 1024
+	copyBufSize := protocol.CopyBufSize(0)
 	go func() {
 		cb := make([]byte, copyBufSize)
 		io.CopyBuffer(remote, client, cb)
