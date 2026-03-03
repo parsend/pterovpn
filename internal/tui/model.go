@@ -1079,9 +1079,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = statusDisconnected
 						m.activeCfg = ""
 					} else {
-						idx := bestServerIndex(m.cfgs, m.names, m.pingResults, m.pingFailed, m.pterovpnRes, "")
-						if idx < 0 {
-							idx = m.cfgList.Index()
+						idx := m.cfgList.Index()
+						if idx < 0 || idx >= len(m.cfgs) {
+							idx = bestServerIndex(m.cfgs, m.names, m.pingResults, m.pingFailed, m.pterovpnRes, "")
 							if idx < 0 {
 								idx = 0
 							}
@@ -1111,9 +1111,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = statusDisconnected
 						m.activeCfg = ""
 					} else {
-						idx := bestServerIndex(m.cloudCfgs, m.cloudNames, m.pingResults, m.pingFailed, m.pterovpnRes, "")
-						if idx < 0 {
-							idx = m.cloudList.Index()
+						idx := m.cloudList.Index()
+						if idx < 0 || idx >= len(m.cloudCfgs) {
+							idx = bestServerIndex(m.cloudCfgs, m.cloudNames, m.pingResults, m.pingFailed, m.pterovpnRes, "")
 							if idx < 0 {
 								idx = 0
 							}
@@ -1459,9 +1459,31 @@ func (m Model) View() string {
 	if m.activeCfg != "" {
 		b.WriteString("Конфигурация: " + m.activeCfg)
 	}
-	if m.status == statusConnected && m.udpSupportPort > 0 {
-		b.WriteString("  ")
-		b.WriteString(logTrafficStyle.Render("udp supp"))
+	if m.status == statusConnected {
+		server := ""
+		for i, n := range m.names {
+			if n == m.activeCfg && i < len(m.cfgs) {
+				server = m.cfgs[i].Server
+				break
+			}
+		}
+		if server == "" {
+			for i, n := range m.cloudNames {
+				if n == m.activeCfg && i < len(m.cloudCfgs) {
+					server = m.cloudCfgs[i].Server
+					break
+				}
+			}
+		}
+		if server != "" {
+			b.WriteString("  ")
+			b.WriteString(kvLabel.Render("→ "))
+			b.WriteString(kvValue.Render(server))
+		}
+		if m.udpSupportPort > 0 {
+			b.WriteString("  ")
+			b.WriteString(logTrafficStyle.Render("udp supp"))
+		}
 	}
 	b.WriteString("\n\n")
 
@@ -1515,7 +1537,7 @@ func (m Model) View() string {
 			content.WriteString("Режим: TUN\n")
 		}
 		if m.status == statusConnected && m.udpSupportPort > 0 {
-			content.WriteString(logOKStyle.Render(" udp supp"))
+			content.WriteString(logOKStyle.Render("Я поддерживаю udp! udp supp"))
 			content.WriteString("\n")
 		}
 		if m.err != "" {
@@ -1559,7 +1581,28 @@ func (m Model) View() string {
 		} else if m.cloudFetchErr != "" {
 			content.WriteString(errStyle.Render("Ошибка: " + m.cloudFetchErr))
 			content.WriteString("\n\nR - обновить")
-		} else if len(m.cloudCfgs) == 0 {
+		} else if m.status == statusConnected && m.connectTab == tabCloud {
+			content.WriteString(sectionTitle.Render("Подключено") + "\n")
+			content.WriteString("  ")
+			content.WriteString(kvLabel.Render("Сервер:") + " ")
+			found := false
+			for i, n := range m.cloudNames {
+				if n == m.activeCfg && i < len(m.cloudCfgs) {
+					content.WriteString(kvValue.Render(m.cloudCfgs[i].Server))
+					found = true
+					break
+				}
+			}
+			if !found && m.activeCfgConfig.Server != "" {
+				content.WriteString(kvValue.Render(m.activeCfgConfig.Server))
+			}
+			if m.udpSupportPort > 0 {
+				content.WriteString("  ")
+				content.WriteString(logTrafficStyle.Render("udp supp"))
+			}
+			content.WriteString("\n\n")
+		}
+		if len(m.cloudCfgs) == 0 {
 			content.WriteString(emptyState.Render("Нет конфигов. R - загрузить с реп"))
 		} else {
 			content.WriteString(m.cloudList.View())
@@ -1678,7 +1721,7 @@ func (m Model) View() string {
 		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  D - удалить"
 	}
 	if m.tab == tabCloud && !m.cloudLoading {
-		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  R - обновить"
+		footer += "  ↑/↓ - выбор сервера  Enter - к выбранному  P - ping  T - pterovpn  R - обновить"
 	}
 	if m.tab == tabLogs {
 		footer += "  ↑/↓ PgUp/PgDn Home/End - прокрутка"
