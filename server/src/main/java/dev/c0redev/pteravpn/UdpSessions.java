@@ -2,6 +2,8 @@ package dev.c0redev.pteravpn;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.util.Optional;
 import java.nio.ByteBuffer;
@@ -24,8 +26,11 @@ final class UdpSessions implements AutoCloseable {
   private final Selector selector;
   private final Thread selectorThread;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final String token;
+  private volatile DatagramSocket rawSocket;
 
-  UdpSessions(int channels) throws IOException {
+  UdpSessions(int channels, String token) throws IOException {
+    this.token = token != null ? token : "";
     this.writers = new UdpChannelWriter[channels];
     this.selector = Selector.open();
     this.selectorThread = new Thread(this::selectLoop, "udp-selector");
@@ -33,9 +38,29 @@ final class UdpSessions implements AutoCloseable {
     this.selectorThread.start();
   }
 
+  void setRawUdp(DatagramSocket socket) {
+    this.rawSocket = socket;
+  }
+
   void setWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
     if (channelId < 0 || channelId >= writers.length) throw new IllegalArgumentException("bad channel");
     writers[channelId] = new UdpChannelWriter(channelId, out, opts);
+  }
+
+  void onRawFrame(InetSocketAddress clientAddr, Protocol.UdpFrame f) throws IOException {
+    Key k = new Key(f.addrType(), f.srcPort(), f.dst().getAddress(), f.dstPort());
+    Session s = sessions.get(k);
+    if (s == null) {
+      Session created = createSessionFromRaw(clientAddr, k, f);
+      Session raced = sessions.putIfAbsent(k, created);
+      if (raced != null) {
+        created.close();
+        s = raced;
+      } else {
+        s = created;
+      }
+    }
+    s.send(f.payload());
   }
 
   void onFrame(int channelId, Protocol.UdpFrame f) throws IOException {
@@ -54,12 +79,23 @@ final class UdpSessions implements AutoCloseable {
     s.send(f.payload());
   }
 
+  private Session createSessionFromRaw(InetSocketAddress clientAddr, Key k, Protocol.UdpFrame f) throws IOException {
+    DatagramChannel dc = DatagramChannel.open();
+    dc.configureBlocking(false);
+    dc.connect(new InetSocketAddress(f.dst(), f.dstPort()));
+    SelectionKey sk = dc.register(selector, SelectionKey.OP_READ);
+    Session s = new Session(-1, k, f.dst(), dc, sk, Optional.of(clientAddr));
+    sk.attach(s);
+    selector.wakeup();
+    return s;
+  }
+
   private Session createSession(int channelId, Key k, Protocol.UdpFrame f) throws IOException {
     DatagramChannel dc = DatagramChannel.open();
     dc.configureBlocking(false);
     dc.connect(new InetSocketAddress(f.dst(), f.dstPort()));
     SelectionKey sk = dc.register(selector, SelectionKey.OP_READ);
-    Session s = new Session(channelId, k, f.dst(), dc, sk);
+    Session s = new Session(channelId, k, f.dst(), dc, sk, Optional.empty());
     sk.attach(s);
     selector.wakeup();
     return s;
@@ -81,9 +117,24 @@ final class UdpSessions implements AutoCloseable {
           buf.flip();
           byte[] payload = new byte[buf.remaining()];
           buf.get(payload);
-          UdpChannelWriter w = writers[s.channelId];
-          if (w == null) continue;
-          w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+          Protocol.UdpFrame frame = new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload);
+          if (s.rawClientAddr.isPresent()) {
+            DatagramSocket rs = rawSocket;
+            if (rs != null && rs.isBound()) {
+              try {
+                byte[] plain = Protocol.writeUdpFrameToBytes(frame, Protocol.MAX_PAD);
+                byte[] obf = UdpObfuscate.obfuscateUdpPacket(token, plain);
+                if (obf != null) {
+                  rs.send(new DatagramPacket(obf, obf.length, s.rawClientAddr.get()));
+                }
+              } catch (IOException e) {
+                log.warning("raw udp send: " + e.getMessage());
+              }
+            }
+          } else {
+            UdpChannelWriter w = s.channelId >= 0 && s.channelId < writers.length ? writers[s.channelId] : null;
+            if (w != null) w.send(frame);
+          }
         }
         selector.selectedKeys().clear();
       } catch (IOException e) {
@@ -112,13 +163,15 @@ final class UdpSessions implements AutoCloseable {
     final java.net.InetAddress dst;
     final DatagramChannel dc;
     final SelectionKey sk;
+    final Optional<InetSocketAddress> rawClientAddr;
 
-    Session(int channelId, Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk) {
+    Session(int channelId, Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk, Optional<InetSocketAddress> rawClientAddr) {
       this.channelId = channelId;
       this.key = key;
       this.dst = dst;
       this.dc = dc;
       this.sk = sk;
+      this.rawClientAddr = rawClientAddr != null ? rawClientAddr : Optional.empty();
     }
 
     void send(byte[] payload) throws IOException {

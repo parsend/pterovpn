@@ -7,14 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net"
+		"io"
+		"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
@@ -27,12 +27,13 @@ import (
 )
 
 type Options struct {
-	TunFD       int
-	MTU         int
-	Token       string
-	ServerAddrs []string
-	Ready       func()
-	Device      device.Device
+	TunFD        int
+	MTU          int
+	Token        string
+	ServerAddrs  []string
+	Ready        func()
+	OnUDPSupport func(port uint16)
+	Device       device.Device
 	CreateDevice func() (device.Device, func(), error)
 	Protection   *config.ProtectionOptions
 }
@@ -41,9 +42,9 @@ func Run(ctx context.Context, opt Options) error {
 	if len(opt.ServerAddrs) == 0 {
 		return errors.New("server addrs empty")
 	}
-	log.Printf("vpn: starting, servers=%v", opt.ServerAddrs)
+	clientlog.Info("vpn: starting, servers=%v", opt.ServerAddrs)
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection, opt.OnUDPSupport)
 	if err != nil {
 		return err
 	}
@@ -80,12 +81,12 @@ func Run(ctx context.Context, opt Options) error {
 	}); err != nil {
 		return err
 	}
-	log.Printf("vpn: netstack ready")
+	clientlog.OK("vpn: netstack ready")
 	if opt.Ready != nil {
 		opt.Ready()
 	}
 	<-ctx.Done()
-	log.Printf("vpn: stopping")
+	clientlog.Info("vpn: stopping")
 	return nil
 }
 
@@ -99,31 +100,141 @@ type udpAssoc struct {
 	c net.PacketConn
 }
 
-type udpMux struct {
-	chans []*udpChan
-	mu    sync.RWMutex
-	assoc map[udpAssocKey]*udpAssoc
+type udpSender interface {
+	Send(f protocol.UDPFrame) error
 }
 
-func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
+type udpMux struct {
+	chans      []*udpChan
+	rawChan    *rawUDPChan
+	rawChanMu  sync.Mutex
+	assoc      map[udpAssocKey]*udpAssoc
+	mu         sync.RWMutex
+	token      string
+	addrs      []string
+	onUDP      func(uint16)
+}
+
+type rawUDPChan struct {
+	conn  net.PacketConn
+	addr  *net.UDPAddr
+	token string
+	cb    func(protocol.UDPFrame)
+	stop  chan struct{}
+}
+
+func (r *rawUDPChan) Send(f protocol.UDPFrame) error {
+	plain, err := protocol.UDPFrameToBytes(f, 32)
+	if err != nil {
+		return err
+	}
+	obf, err := obfuscate.ObfuscateUDPPacket(r.token, plain)
+	if err != nil {
+		return err
+	}
+	_, err = r.conn.WriteTo(obf, r.addr)
+	return err
+}
+
+func (r *rawUDPChan) Close() error {
+	close(r.stop)
+	if c, ok := r.conn.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+func (r *rawUDPChan) readLoop() {
+	buf := make([]byte, 64*1024+128)
+	udpConn := r.conn.(*net.UDPConn)
+	for {
+		select {
+		case <-r.stop:
+			return
+		default:
+		}
+		_ = udpConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, err := udpConn.Read(buf)
+		if err != nil {
+			continue
+		}
+		plain, err := obfuscate.DeobfuscateUDPPacket(r.token, buf[:n])
+		if err != nil || len(plain) == 0 {
+			continue
+		}
+		f, err := protocol.ReadUDPFrameFromBytes(plain)
+		if err != nil {
+			continue
+		}
+		r.cb(f)
+	}
+}
+
+func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, onUDP func(uint16)) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
+		token: token,
+		addrs: addrs,
+		onUDP: onUDP,
 	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot)
+		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot, m.onServerHello)
 		if err != nil {
-			log.Printf("vpn: udp channel %d failed: %v", i, err)
+			clientlog.Drop("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
 			return nil, err
 		}
-		log.Printf("vpn: udp channel %d connected", i)
+		clientlog.OK("vpn: udp channel %d connected", i)
 		m.chans[i] = c
 	}
 	return m, nil
 }
 
+func (m *udpMux) onServerHello(udpSupport bool, udpPort uint16) {
+	if !udpSupport || udpPort == 0 {
+		return
+	}
+	m.rawChanMu.Lock()
+	defer m.rawChanMu.Unlock()
+	if m.rawChan != nil {
+		return
+	}
+	addr := m.chans[0].conn.RemoteAddr().String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprintf("%d", udpPort)))
+	if err != nil {
+		return
+	}
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		return
+	}
+	r := &rawUDPChan{
+		conn:  conn,
+		addr:  udpAddr,
+		token: m.token,
+		cb:    m.dispatch,
+		stop:  make(chan struct{}),
+	}
+	m.rawChan = r
+	clientlog.Traffic("vpn: raw udp tunnel to %s", udpAddr)
+	go r.readLoop()
+	if m.onUDP != nil {
+		m.onUDP(udpPort)
+	}
+}
+
 func (m *udpMux) Close() {
+	m.rawChanMu.Lock()
+	if m.rawChan != nil {
+		_ = m.rawChan.Close()
+		m.rawChan = nil
+	}
+	m.rawChanMu.Unlock()
 	for _, c := range m.chans {
 		if c != nil {
 			_ = c.Close()
@@ -143,8 +254,14 @@ func (m *udpMux) unregister(k udpAssocKey) {
 	m.mu.Unlock()
 }
 
-func (m *udpMux) pick(k udpAssocKey) *udpChan {
+func (m *udpMux) pick(k udpAssocKey) udpSender {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%d", k.SrcPort, k.DstIP, k.DstPort)))
+	m.rawChanMu.Lock()
+	raw := m.rawChan
+	m.rawChanMu.Unlock()
+	if raw != nil && (h[0]%2 == 0) {
+		return raw
+	}
 	idx := int(h[0]) % len(m.chans)
 	return m.chans[idx]
 }
@@ -162,11 +279,11 @@ func (m *udpMux) dispatch(f protocol.UDPFrame) {
 	a := m.assoc[k]
 	m.mu.RUnlock()
 	if a == nil {
-		log.Printf("vpn: udp dispatch no assoc for %d->%s:%d", f.SrcPort, f.DstIP.String(), f.DstPort)
+		clientlog.Warn("vpn: udp dispatch no assoc for %d->%s:%d", f.SrcPort, f.DstIP.String(), f.DstPort)
 		return
 	}
 	if _, err := a.c.WriteTo(f.Payload, nil); err != nil {
-		log.Printf("vpn: udp dispatch write error: %v", err)
+		clientlog.Drop("vpn: udp dispatch write error: %v", err)
 	}
 }
 
@@ -180,7 +297,7 @@ type udpChan struct {
 	cb     func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions, onServerHello func(udpSupport bool, udpPort uint16)) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -260,7 +377,11 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			last = err
 			continue
 		}
-		log.Printf("vpn: udp channel %d uses server %s", id, a)
+		udpSupport, udpPort, err := protocol.ReadServerHello(uc.r)
+		if err == nil && onServerHello != nil {
+			onServerHello(udpSupport, udpPort)
+		}
+		clientlog.Traffic("vpn: udp channel %d uses server %s", id, a)
 		go uc.readLoop()
 		return uc, nil
 	}
@@ -290,7 +411,7 @@ func (c *udpChan) readLoop() {
 		}
 		f, err := protocol.ReadUDPFrame(c.r)
 		if err != nil {
-			log.Printf("vpn: udp channel read failed: %v", err)
+			clientlog.Drop("vpn: udp channel read failed: %v", err)
 			return
 		}
 		c.cb(f)
@@ -317,7 +438,7 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	srcPort := uint16(id.RemotePort)
 	dstIP := tcpipToIP(id.LocalAddress)
 	dstPort := uint16(id.LocalPort)
-	log.Printf("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
+		clientlog.Traffic("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
 
 	k := udpAssocKey{SrcPort: srcPort, DstIP: dstIP.String(), DstPort: dstPort}
 	kAlt := udpAssocKey{SrcPort: dstPort, DstIP: dstIP.String(), DstPort: srcPort}
@@ -335,13 +456,13 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	for {
 		n, _, err := uc.ReadFrom(buf)
 		if err != nil {
-			log.Printf("vpn: udp read failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
+			clientlog.Drop("vpn: udp read failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
 		p := make([]byte, n)
 		copy(p, buf[:n])
 		if err := h.udpMux.send(k, p); err != nil {
-			log.Printf("vpn: udp send failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
+			clientlog.Drop("vpn: udp send failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
 	}
@@ -355,10 +476,10 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	dstPort := uint16(id.LocalPort)
 
 	addr := pickAddr(h.opt.ServerAddrs, dstIP, dstPort)
-	log.Printf("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
+	clientlog.Traffic("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
 	sconn, err := dialTCP(addr, h.opt.Token)
 	if err != nil {
-		log.Printf("vpn: tcp dial server failed: %v", err)
+		clientlog.DPI("vpn: tcp dial server failed: %v", err)
 		return
 	}
 	defer sconn.Close()
@@ -398,7 +519,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		junkStyle, flushPolicy = h.opt.Protection.JunkStyle, h.opt.Protection.FlushPolicy
 	}
 	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		log.Printf("vpn: junk write failed: %v", err)
+		clientlog.DPI("vpn: junk write failed: %v", err)
 		return
 	}
 	if !strings.EqualFold(flushPolicy, "perChunk") {
@@ -409,11 +530,11 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		optsJSON, _ = json.Marshal(h.opt.Protection)
 	}
 	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON, slot); err != nil {
-		log.Printf("vpn: tcp handshake failed: %v", err)
+		clientlog.DPI("vpn: tcp handshake failed: %v", err)
 		return
 	}
 	if err := protocol.WriteTcpConnect(w, dstIP, dstPort); err != nil {
-		log.Printf("vpn: tcp connect frame failed: %v", err)
+		clientlog.DPI("vpn: tcp connect frame failed: %v", err)
 		return
 	}
 
@@ -440,7 +561,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	_ = tc.Close()
 	_ = sconn.Close()
 	<-done
-	log.Printf("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
+	clientlog.Traffic("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
 }
 
 func dialTCP(addr string, token string) (net.Conn, error) {

@@ -108,6 +108,32 @@ func DNSOK(addrs []string, timeout time.Duration) bool {
 	return err == nil
 }
 
+func ProbeQuality(addr string, count int, timeout time.Duration) (avgRTT time.Duration, lossPct float64, err error) {
+	if count < 1 {
+		count = 5
+	}
+	if timeout <= 0 {
+		timeout = defaultProbeTimeout
+	}
+	perProbe := timeout / time.Duration(count)
+	if perProbe < 500*time.Millisecond {
+		perProbe = 500 * time.Millisecond
+	}
+	var sum time.Duration
+	var ok int
+	for i := 0; i < count; i++ {
+		d, e := Ping(addr, perProbe)
+		if e == nil {
+			sum += d
+			ok++
+		}
+	}
+	if ok == 0 {
+		return 0, 100, errors.New("all probes failed")
+	}
+	return sum / time.Duration(ok), 100 * (1 - float64(ok)/float64(count)), nil
+}
+
 func InternetOK(timeout time.Duration) bool {
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout

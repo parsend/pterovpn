@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
@@ -440,6 +441,19 @@ func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
 	return WriteUDPFrameWithPad(w, f, maxPad)
 }
 
+func UDPFrameToBytes(f UDPFrame, maxPadVal int) ([]byte, error) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	if err := WriteUDPFrameWithPad(w, f, maxPadVal); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func ReadUDPFrameFromBytes(b []byte) (UDPFrame, error) {
+	return ReadUDPFrame(bufio.NewReader(bytes.NewReader(b)))
+}
+
 func WriteUDPFrameWithPad(w *bufio.Writer, f UDPFrame, maxPadVal int) error {
 	if maxPadVal <= 0 || maxPadVal > 64 {
 		maxPadVal = maxPad
@@ -551,4 +565,37 @@ func writeU32(w *bufio.Writer, v uint32) error {
 	binary.BigEndian.PutUint32(b[:], v)
 	_, err := w.Write(b[:])
 	return err
+}
+
+const serverHelloFlagUDP = 1
+
+func WriteServerHello(w *bufio.Writer, udpSupport bool, udpPort uint16) error {
+	var flags byte
+	if udpSupport {
+		flags |= serverHelloFlagUDP
+	}
+	if err := w.WriteByte(flags); err != nil {
+		return err
+	}
+	if udpSupport {
+		if err := writeU16(w, udpPort); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func ReadServerHello(r *bufio.Reader) (udpSupport bool, udpPort uint16, err error) {
+	flags, err := r.ReadByte()
+	if err != nil {
+		return false, 0, err
+	}
+	udpSupport = (flags & serverHelloFlagUDP) != 0
+	if udpSupport {
+		udpPort, err = readU16(r)
+		if err != nil {
+			return false, 0, err
+		}
+	}
+	return udpSupport, udpPort, nil
 }

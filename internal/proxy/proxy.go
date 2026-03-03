@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"log"
 	"net"
 
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/protocol"
 	"github.com/parsend/pterovpn/internal/tunnel"
@@ -18,7 +18,7 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 		return err
 	}
 	defer ln.Close()
-	log.Printf("proxy: listening on %s", listenAddr)
+	clientlog.OK("proxy: listening on %s", listenAddr)
 
 	go func() {
 		<-ctx.Done()
@@ -31,7 +31,7 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 			if ctx.Err() != nil {
 				return nil
 			}
-			log.Printf("proxy: accept: %v", err)
+			clientlog.Err("proxy: accept: %v", err)
 			continue
 		}
 		go handleSOCKS5(conn, serverAddrs, token, prot)
@@ -120,7 +120,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 
 	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot)
 	if err != nil {
-		log.Printf("proxy: tunnel %s:%d: %v", host, port, err)
+		clientlog.DPI("proxy: tunnel %s:%d: %v", host, port, err)
 		reply(client, 1)
 		return
 	}

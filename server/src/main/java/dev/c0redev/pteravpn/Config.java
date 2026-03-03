@@ -14,13 +14,25 @@ final class Config {
   private final int udpChannels;
   private final String publicHost;
   private final boolean debug;
+  private final boolean udpSupport;
+  private final int udpPort;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug, boolean udpSupport, int udpPort) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
     this.publicHost = publicHost != null ? publicHost : "";
     this.debug = debug;
+    this.udpSupport = udpSupport;
+    this.udpPort = udpPort;
+  }
+
+  boolean udpSupport() {
+    return udpSupport;
+  }
+
+  int udpPort() {
+    return udpPort;
   }
 
   boolean debug() {
@@ -63,7 +75,10 @@ final class Config {
 
     String publicHost = firstNonEmpty(p.getProperty("publicHost"), "");
     boolean debug = "true".equalsIgnoreCase(p.getProperty("debug", "").trim());
-    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug);
+    boolean udpSupport = "true".equalsIgnoreCase(p.getProperty("udpsupport", "").trim());
+    int udpPort = parseInt(p.getProperty("udpPort"), 0);
+    if (udpPort < 0 || udpPort > 65535) throw new IOException("udpPort must be 0-65535");
+    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug, udpSupport, udpPort);
   }
 
   private static String firstNonEmpty(String a, String b) {

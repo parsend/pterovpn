@@ -1,8 +1,8 @@
 # ptera vpn
 
 # Мобильная версия в разработке.
-# Также будет протокол улучшен, в частности его скрытность. 
-#  Проект был написан c0redev(parsend) - telegram: tcptransit
+
+ Проект был написан c0redev(parsend) - telegram: tcptransit
 
 License: MIT © c0redev (parsend)
 

@@ -60,12 +60,13 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
-			Device:      dev,
-			MTU:         opts.mtu,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			Device:       dev,
+			MTU:          opts.mtu,
+			Token:        opts.token,
+			ServerAddrs:  addrs,
+			Ready:        func() { close(ready) },
+			Protection:   opts.protection,
+			OnUDPSupport: opts.onUDPSupport,
 		})
 	}()
 

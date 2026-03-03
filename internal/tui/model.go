@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/geo"
 	"github.com/parsend/pterovpn/internal/metrics"
@@ -53,11 +54,12 @@ const (
 	statusConnected
 )
 
-type ConnectFn func(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error)
+type ConnectFn func(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, udpCh chan<- uint16) (stop func(), err error)
 
 type Opts struct {
-	ConnectFn ConnectFn
-	Version   string
+	ConnectFn   ConnectFn
+	UDPSupportCh chan uint16
+	Version     string
 }
 
 type item struct {
@@ -148,7 +150,12 @@ type Model struct {
 
 	updateAvailable string
 
-	connectCount int
+	connectCount    int
+	connectTab      tab
+	connectCfgs     []config.Config
+	connectNames    []string
+	activeCfgConfig config.Config
+	udpSupportPort  uint16
 }
 
 var (
@@ -170,10 +177,13 @@ var (
 			Padding(0, 1).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(dim))
-	logLineStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(dim))
-	logErrStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(errCol))
+	logLineStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(dim))
+	logErrStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol))
+	logOKStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	logTrafficStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	logDropStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	logDPIStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	logWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(dim))
 	sectionTitle = lipgloss.NewStyle().
@@ -531,7 +541,73 @@ type updateCheckMsg struct {
 	latest string
 }
 
+type monitorTickMsg struct{}
+type probeCurrentResultMsg struct{ ok bool }
+type udpSupportMsg struct{ port uint16 }
+
 func LogMessage(s string) tea.Msg { return logMsg(s) }
+
+func UDPSupportMsg(port uint16) tea.Msg { return udpSupportMsg{port: port} }
+
+func bestServerIndex(cfgs []config.Config, names []string, pingResults map[string]time.Duration, pingFailed map[string]bool, pterovpnRes map[string]int, excludeServer string) int {
+	best := -1
+	var bestRTT time.Duration
+	for i := range cfgs {
+		srv := cfgs[i].Server
+		if excludeServer != "" && srv == excludeServer {
+			continue
+		}
+		ptr := pterovpnRes[names[i]]
+		if ptr != 1 {
+			continue
+		}
+		if pingFailed[names[i]] {
+			continue
+		}
+		d, ok := pingResults[names[i]]
+		if !ok || d <= 0 {
+			d = 24 * time.Hour
+		}
+		if best < 0 || d < bestRTT {
+			best = i
+			bestRTT = d
+		}
+	}
+	if best >= 0 {
+		return best
+	}
+	for i := range cfgs {
+		srv := cfgs[i].Server
+		if excludeServer != "" && srv == excludeServer {
+			continue
+		}
+		if pingFailed[names[i]] {
+			continue
+		}
+		d, ok := pingResults[names[i]]
+		if !ok || d <= 0 {
+			d = 24 * time.Hour
+		}
+		if best < 0 || d < bestRTT {
+			best = i
+			bestRTT = d
+		}
+	}
+	return best
+}
+
+const monitorInterval = 45 * time.Second
+
+func runMonitorTick() tea.Cmd {
+	return tea.Tick(monitorInterval, func(time.Time) tea.Msg { return monitorTickMsg{} })
+}
+
+func runProbeCurrent(addr string) tea.Cmd {
+	return func() tea.Msg {
+		ok, _ := probe.ProbePterovpn(addr, probeTimeout)
+		return probeCurrentResultMsg{ok: ok}
+	}
+}
 
 func runCheckUpdate(currentVersion string) tea.Cmd {
 	return func() tea.Msg {
@@ -994,11 +1070,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.tab == tabConfig && m.deletingCfg == "" && m.opts.ConnectFn != nil && len(m.cfgs) > 0 {
-				idx := m.cfgList.Index()
-				if idx < 0 {
-					idx = 0
-				}
-				if idx < len(m.cfgs) && m.status != statusConnecting {
+				if m.status != statusConnecting {
 					if m.status == statusConnected {
 						if m.stop != nil {
 							m.stop()
@@ -1007,21 +1079,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = statusDisconnected
 						m.activeCfg = ""
 					} else {
-						m.status = statusConnecting
-						m.err = ""
-						m.activeCfg = m.names[idx]
-						m.connectCount++
-						cfg := m.cfgs[idx]
-						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
+						idx := bestServerIndex(m.cfgs, m.names, m.pingResults, m.pingFailed, m.pterovpnRes, "")
+						if idx < 0 {
+							idx = m.cfgList.Index()
+							if idx < 0 {
+								idx = 0
+							}
+						}
+						if idx < len(m.cfgs) {
+							m.status = statusConnecting
+							m.err = ""
+							m.activeCfg = m.names[idx]
+							m.connectCount++
+							m.connectTab = tabConfig
+							m.connectCfgs = m.cfgs
+							m.connectNames = m.names
+							cfg := m.cfgs[idx]
+							m.activeCfgConfig = cfg
+							return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn, m.opts.UDPSupportCh)
+						}
 					}
 				}
 			}
 			if m.tab == tabCloud && !m.cloudLoading && m.opts.ConnectFn != nil && len(m.cloudCfgs) > 0 {
-				idx := m.cloudList.Index()
-				if idx < 0 {
-					idx = 0
-				}
-				if idx < len(m.cloudCfgs) && m.status != statusConnecting {
+				if m.status != statusConnecting {
 					if m.status == statusConnected {
 						if m.stop != nil {
 							m.stop()
@@ -1030,12 +1111,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.status = statusDisconnected
 						m.activeCfg = ""
 					} else {
-						m.status = statusConnecting
-						m.err = ""
-						m.activeCfg = m.cloudNames[idx]
-						m.connectCount++
-						cfg := m.cloudCfgs[idx]
-						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
+						idx := bestServerIndex(m.cloudCfgs, m.cloudNames, m.pingResults, m.pingFailed, m.pterovpnRes, "")
+						if idx < 0 {
+							idx = m.cloudList.Index()
+							if idx < 0 {
+								idx = 0
+							}
+						}
+						if idx < len(m.cloudCfgs) {
+							m.status = statusConnecting
+							m.err = ""
+							m.activeCfg = m.cloudNames[idx]
+							m.connectCount++
+							m.connectTab = tabCloud
+							m.connectCfgs = m.cloudCfgs
+							m.connectNames = m.cloudNames
+							cfg := m.cloudCfgs[idx]
+							m.activeCfgConfig = cfg
+							return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn, m.opts.UDPSupportCh)
+						}
 					}
 				}
 			}
@@ -1043,17 +1137,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectedMsg:
 		m.status = statusConnected
 		m.stop = msg.stop
-		return m, nil
+		m.udpSupportPort = 0
+		return m, runMonitorTick()
 	case disconnectedMsg:
 		m.status = statusDisconnected
 		m.stop = nil
 		m.activeCfg = ""
+		m.udpSupportPort = 0
 		return m, nil
 	case errMsg:
 		m.status = statusDisconnected
 		m.stop = nil
 		m.err = string(msg)
 		m.activeCfg = ""
+		m.udpSupportPort = 0
+		return m, nil
+	case monitorTickMsg:
+		if m.status == statusConnected && m.stop != nil && m.activeCfgConfig.Server != "" {
+			return m, runProbeCurrent(m.activeCfgConfig.Server)
+		}
+		return m, nil
+	case probeCurrentResultMsg:
+		if m.status == statusConnected && !msg.ok && m.stop != nil && len(m.connectCfgs) > 0 {
+			nextIdx := bestServerIndex(m.connectCfgs, m.connectNames, m.pingResults, m.pingFailed, m.pterovpnRes, m.activeCfgConfig.Server)
+			if nextIdx >= 0 {
+				m.stop()
+				m.stop = nil
+				m.status = statusConnecting
+				m.activeCfg = m.connectNames[nextIdx]
+				m.connectCount++
+				cfg := m.connectCfgs[nextIdx]
+				m.activeCfgConfig = cfg
+				return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn, m.opts.UDPSupportCh)
+			}
+		}
+		if m.status == statusConnected {
+			return m, runMonitorTick()
+		}
+		return m, nil
+	case udpSupportMsg:
+		m.udpSupportPort = msg.port
 		return m, nil
 	case logMsg:
 		m.logsMu.Lock()
@@ -1171,9 +1294,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func waitConnect(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, fn ConnectFn) tea.Cmd {
+func waitConnect(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, fn ConnectFn, udpCh chan<- uint16) tea.Cmd {
 	return func() tea.Msg {
-		stop, err := fn(cfg, configName, reconnectCount, settings)
+		stop, err := fn(cfg, configName, reconnectCount, settings, udpCh)
 		if err != nil {
 			return errMsg(err.Error())
 		}
@@ -1336,6 +1459,10 @@ func (m Model) View() string {
 	if m.activeCfg != "" {
 		b.WriteString("Конфигурация: " + m.activeCfg)
 	}
+	if m.status == statusConnected && m.udpSupportPort > 0 {
+		b.WriteString("  ")
+		b.WriteString(logTrafficStyle.Render("udp supp"))
+	}
 	b.WriteString("\n\n")
 
 	for i, name := range tabNames {
@@ -1386,6 +1513,10 @@ func (m Model) View() string {
 			content.WriteString("Режим: Proxy (" + m.clientSettings.ProxyListen + ")\n")
 		} else {
 			content.WriteString("Режим: TUN\n")
+		}
+		if m.status == statusConnected && m.udpSupportPort > 0 {
+			content.WriteString(logOKStyle.Render(" udp supp"))
+			content.WriteString("\n")
 		}
 		if m.err != "" {
 			content.WriteString(errStyle.Render("Ошибка: " + m.err))
@@ -1456,11 +1587,26 @@ func (m Model) View() string {
 		var logLines strings.Builder
 		for _, line := range m.logs {
 			line = strings.TrimRight(line, "\r\n")
-			if strings.Contains(strings.ToLower(line), "failed") || strings.Contains(strings.ToLower(line), "error") {
-				logLines.WriteString(logErrStyle.Render(line))
-			} else {
-				logLines.WriteString(logLineStyle.Render(line))
+			payload := clientlog.LinePayload(line)
+			tag := clientlog.InferTag(line)
+			var styled string
+			switch tag {
+			case "OK":
+				styled = logOKStyle.Render(payload)
+			case "TRAFFIC":
+				styled = logTrafficStyle.Render(payload)
+			case "DROP":
+				styled = logDropStyle.Render("▼ " + payload)
+			case "DPI":
+				styled = logDPIStyle.Render("◆ " + payload)
+			case "ERR":
+				styled = logErrStyle.Render("✗ " + payload)
+			case "WARN":
+				styled = logWarnStyle.Render("⚠ " + payload)
+			default:
+				styled = logLineStyle.Render(payload)
 			}
+			logLines.WriteString(styled)
 			logLines.WriteString("\n")
 		}
 		logStr := logLines.String()

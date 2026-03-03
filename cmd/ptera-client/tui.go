@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/netcfg"
@@ -45,20 +46,28 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 
 func runTUI() error {
 	logCh := make(chan string, 200)
+	udpCh := make(chan uint16, 1)
 	log.SetOutput(&logWriter{ch: logCh})
 	defer func() {
 		log.SetOutput(os.Stderr)
 		close(logCh)
+		close(udpCh)
 	}()
 
 	opts := tui.Opts{
-		ConnectFn: connectVPN,
-		Version:   version,
+		ConnectFn:    connectVPN,
+		UDPSupportCh: udpCh,
+		Version:      version,
 	}
 	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen())
 	go func() {
 		for line := range logCh {
 			p.Send(tui.LogMessage(line))
+		}
+	}()
+	go func() {
+		for port := range udpCh {
+			p.Send(tui.UDPSupportMsg(port))
 		}
 	}()
 	_, err := p.Run()
@@ -99,7 +108,7 @@ func classifyError(err error) string {
 	return "unknown"
 }
 
-func connectVPN(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error) {
+func connectVPN(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, udpCh chan<- uint16) (stop func(), err error) {
 	if cfg.Server == "" || cfg.Token == "" {
 		return nil, fmt.Errorf("server и token обязательны")
 	}
@@ -184,6 +193,14 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			return nil, errors.New("preCheck: server is not pterovpn")
 		}
 	}
+	onUDP := func(port uint16) {
+		if udpCh != nil {
+			select {
+			case udpCh <- port:
+			default:
+			}
+		}
+	}
 	opts := runOpts{
 		serverIP:     sip,
 		token:        cfg.Token,
@@ -194,6 +211,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		excludeCIDRs: excludeCIDRs,
 		protection:   prot,
 		proxy:        settings.Mode == "proxy",
+		onUDPSupport: onUDP,
 		proxyListen:  settings.ProxyListen,
 		systemProxy:  settings.SystemProxy,
 	}
@@ -212,7 +230,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	select {
 	case <-ready:
 		record.HandshakeOK = true
-		log.Printf("TUI: connected to %s", cfg.Server)
+		clientlog.OK("TUI: connected to %s", cfg.Server)
 		stop := func() {
 			cancel()
 			<-done

@@ -57,6 +57,8 @@ final class ConnectionHandler implements Runnable {
             );
 
             if (hs.role() == Protocol.ROLE_UDP) {
+                int effectiveUdpPort = cfg.udpPort() > 0 ? cfg.udpPort() : s.getLocalPort() + 1;
+                Protocol.writeServerHello(out, cfg.udpSupport(), effectiveUdpPort);
                 handleUdp(hs.channelId(), in, out, hr.opts());
                 return;
             }

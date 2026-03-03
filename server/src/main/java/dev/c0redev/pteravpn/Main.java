@@ -1,6 +1,8 @@
 package dev.c0redev.pteravpn;
 
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -34,13 +36,17 @@ public final class Main {
     log.info("Pump pool: " + pumpThreads + " threads");
     ExecutorService pool = Executors.newCachedThreadPool();
     ExecutorService pumpPool = Executors.newFixedThreadPool(pumpThreads);
-    try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {
-      List<ServerSocket> sockets = new ArrayList<>();
+    try (UdpSessions udp = new UdpSessions(cfg.udpChannels(), cfg.token());
+         DatagramSocket rawUdp = cfg.udpSupport() ? new DatagramSocket(cfg.udpPort() > 0 ? cfg.udpPort() : cfg.listenPorts().get(0) + 1) : null) {
+      if (rawUdp != null) {
+        log.info("Raw UDP listening on port " + rawUdp.getLocalPort());
+        udp.setRawUdp(rawUdp);
+        pool.submit(() -> rawUdpLoop(rawUdp, cfg.token(), udp));
+      }
       for (int port : cfg.listenPorts()) {
         ServerSocket ss = new ServerSocket();
         ss.setReuseAddress(true);
         ss.bind(new InetSocketAddress(port));
-        sockets.add(ss);
         pool.submit(() -> acceptLoop(ss, cfg, udp, pool, pumpPool));
       }
 
@@ -48,6 +54,22 @@ public final class Main {
     } finally {
       pool.shutdown();
       pumpPool.shutdown();
+    }
+  }
+
+  private static void rawUdpLoop(DatagramSocket socket, String token, UdpSessions udp) {
+    byte[] buf = new byte[64 * 1024 + 128];
+    while (!socket.isClosed()) {
+      try {
+        DatagramPacket p = new DatagramPacket(buf, buf.length);
+        socket.receive(p);
+        byte[] plain = UdpObfuscate.deobfuscateUdpPacket(token, java.util.Arrays.copyOf(p.getData(), p.getLength()));
+        if (plain == null || plain.length == 0) continue;
+        Protocol.UdpFrame f = Protocol.readUdpFrameFromBytes(plain);
+        udp.onRawFrame((InetSocketAddress) p.getSocketAddress(), f);
+      } catch (IOException e) {
+        if (!socket.isClosed()) log.warning("raw udp: " + e.getMessage());
+      }
     }
   }
 

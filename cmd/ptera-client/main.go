@@ -26,6 +26,7 @@ type runOpts struct {
 	proxy        bool
 	proxyListen  string
 	systemProxy  bool
+	onUDPSupport func(uint16)
 }
 
 func main() {

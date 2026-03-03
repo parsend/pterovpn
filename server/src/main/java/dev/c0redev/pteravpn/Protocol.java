@@ -1,5 +1,7 @@
 package dev.c0redev.pteravpn;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -82,6 +84,10 @@ final class Protocol {
     return new TcpConnect((byte) at, ip, port);
   }
 
+  static UdpFrame readUdpFrameFromBytes(byte[] b) throws IOException {
+    return readUdpFrame(new ByteArrayInputStream(b));
+  }
+
   static UdpFrame readUdpFrame(InputStream in) throws IOException {
     int flen = readU32(in);
     if (flen < 2 || flen > MAX_FRAME) throw new IOException("bad frame len");
@@ -135,6 +141,12 @@ final class Protocol {
     out.flush();
   }
 
+  static byte[] writeUdpFrameToBytes(UdpFrame f, int maxPad) throws IOException {
+    ByteArrayOutputStream bout = new ByteArrayOutputStream();
+    writeUdpFrame(bout, f, maxPad);
+    return bout.toByteArray();
+  }
+
   static InetAddress readAddr(InputStream in, byte addrType) throws IOException {
     return switch (addrType) {
       case ADDR_V4 -> InetAddress.getByAddress(readN(in, 4));
@@ -185,6 +197,29 @@ final class Protocol {
     out.write((v >>> 8) & 0xff);
     out.write(v & 0xff);
   }
+
+  static final int SERVER_HELLO_FLAG_UDP = 1;
+
+  static void writeServerHello(OutputStream out, boolean udpSupport, int udpPort) throws IOException {
+    int flags = udpSupport ? SERVER_HELLO_FLAG_UDP : 0;
+    out.write(flags & 0xff);
+    if (udpSupport) {
+      writeU16(out, udpPort);
+    }
+    out.flush();
+  }
+
+  static ServerHello readServerHello(InputStream in) throws IOException {
+    int flags = readU8(in);
+    boolean udpSupport = (flags & SERVER_HELLO_FLAG_UDP) != 0;
+    int udpPort = 0;
+    if (udpSupport) {
+      udpPort = readU16(in);
+    }
+    return new ServerHello(udpSupport, udpPort);
+  }
+
+  record ServerHello(boolean udpSupport, int udpPort) {}
 
   record Handshake(byte role, int channelId, String token) {}
   record TcpConnect(byte addrType, InetAddress ip, int port) {}

@@ -1,5 +1,7 @@
 listenPorts=5555
 token=your-secret-key
-udpChannels=4
+udpChannels=4 #udp over tcp conn
 publicHost=1.2.3.4
 debug=false
+udpsupport=true #отдельный udp туннель.
+udpPort=0 #+1 от tcp порта
