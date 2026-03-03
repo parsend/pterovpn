@@ -5,13 +5,13 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/netcfg"
 	"github.com/parsend/pterovpn/internal/proxy"
 	"github.com/parsend/pterovpn/internal/sysproxy"
@@ -28,11 +28,11 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		return err
 	}
 	if opts.serverIP.To4() == nil {
-		log.Printf("warning: server %s is IPv6, bypass route not added (Windows)", opts.serverIP)
+		clientlog.Warn("warning: server %s is IPv6, bypass route not added (Windows)", opts.serverIP)
 	} else if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
 		return err
 	} else {
-		log.Printf("bypass route for %s (metric 1), dr.Dev=%q dr.Gateway=%q", opts.serverIP, dr.Dev, dr.Gateway)
+		clientlog.Info("bypass route for %s (metric 1), dr.Dev=%q dr.Gateway=%q", opts.serverIP, dr.Dev, dr.Gateway)
 	}
 	if err := netcfg.AddExcludeRoutes(dr, opts.excludeCIDRs); err != nil {
 		return err
@@ -71,7 +71,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 
 	select {
 	case <-ready:
-		log.Printf("Tunnel ready, switching routes to %s", name)
+		clientlog.OK("Tunnel ready, switching routes to %s", name)
 		if err := netcfg.AddRoutesViaTun(name, opts.routeCIDRs, 5); err != nil {
 			return err
 		}
@@ -111,7 +111,7 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 		}
 		defer sysproxy.Clear()
 	}
-	log.Printf("proxy mode: listening on %s", opts.proxyListen)
+		clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
 	if onReady != nil {
 		onReady()
 	}

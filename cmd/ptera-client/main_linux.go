@@ -5,12 +5,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/netcfg"
 	"github.com/parsend/pterovpn/internal/proxy"
 	"github.com/parsend/pterovpn/internal/tun"
@@ -26,7 +26,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	if opts.proxy {
 		sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		log.Printf("proxy mode: listening on %s", opts.proxyListen)
+		clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
 		if onReady != nil {
 			onReady()
 		}
@@ -87,7 +87,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 
 	select {
 	case <-ready:
-		log.Printf("Tunnel ready, switching routes to %s", opts.tunName)
+		clientlog.OK("Tunnel ready, switching routes to %s", opts.tunName)
 		if err := netcfg.AddRoutesViaTun(opts.tunName, opts.routeCIDRs, 5); err != nil {
 			return err
 		}

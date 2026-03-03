@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/netcfg"
@@ -212,7 +213,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	select {
 	case <-ready:
 		record.HandshakeOK = true
-		log.Printf("TUI: connected to %s", cfg.Server)
+		clientlog.OK("TUI: connected to %s", cfg.Server)
 		stop := func() {
 			cancel()
 			<-done

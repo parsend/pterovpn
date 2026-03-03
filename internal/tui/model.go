@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/geo"
 	"github.com/parsend/pterovpn/internal/metrics"
@@ -170,10 +171,13 @@ var (
 			Padding(0, 1).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(dim))
-	logLineStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(dim))
-	logErrStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(errCol))
+	logLineStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(dim))
+	logErrStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(errCol))
+	logOKStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	logTrafficStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	logDropStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	logDPIStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	logWarnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(dim))
 	sectionTitle = lipgloss.NewStyle().
@@ -1456,11 +1460,26 @@ func (m Model) View() string {
 		var logLines strings.Builder
 		for _, line := range m.logs {
 			line = strings.TrimRight(line, "\r\n")
-			if strings.Contains(strings.ToLower(line), "failed") || strings.Contains(strings.ToLower(line), "error") {
-				logLines.WriteString(logErrStyle.Render(line))
-			} else {
-				logLines.WriteString(logLineStyle.Render(line))
+			payload := clientlog.LinePayload(line)
+			tag := clientlog.InferTag(line)
+			var styled string
+			switch tag {
+			case "OK":
+				styled = logOKStyle.Render(payload)
+			case "TRAFFIC":
+				styled = logTrafficStyle.Render(payload)
+			case "DROP":
+				styled = logDropStyle.Render("▼ " + payload)
+			case "DPI":
+				styled = logDPIStyle.Render("◆ " + payload)
+			case "ERR":
+				styled = logErrStyle.Render("✗ " + payload)
+			case "WARN":
+				styled = logWarnStyle.Render("⚠ " + payload)
+			default:
+				styled = logLineStyle.Render(payload)
 			}
+			logLines.WriteString(styled)
 			logLines.WriteString("\n")
 		}
 		logStr := logLines.String()
