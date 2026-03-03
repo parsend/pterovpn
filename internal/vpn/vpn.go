@@ -191,18 +191,17 @@ func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptio
 	return m, nil
 }
 
-func (m *udpMux) onServerHello(udpSupport bool, udpPort uint16) {
+func (m *udpMux) onServerHello(serverAddr string, udpSupport bool, udpPort uint16) {
 	if !udpSupport || udpPort == 0 {
+		return
+	}
+	host, _, err := net.SplitHostPort(serverAddr)
+	if err != nil {
 		return
 	}
 	m.rawChanMu.Lock()
 	defer m.rawChanMu.Unlock()
 	if m.rawChan != nil {
-		return
-	}
-	addr := m.chans[0].conn.RemoteAddr().String()
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
 		return
 	}
 	udpAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprintf("%d", udpPort)))
@@ -297,7 +296,7 @@ type udpChan struct {
 	cb     func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions, onServerHello func(udpSupport bool, udpPort uint16)) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions, onServerHello func(serverAddr string, udpSupport bool, udpPort uint16)) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -379,7 +378,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 		}
 		udpSupport, udpPort, err := protocol.ReadServerHello(uc.r)
 		if err == nil && onServerHello != nil {
-			onServerHello(udpSupport, udpPort)
+			onServerHello(c.RemoteAddr().String(), udpSupport, udpPort)
 		}
 		clientlog.Traffic("vpn: udp channel %d uses server %s", id, a)
 		go uc.readLoop()
