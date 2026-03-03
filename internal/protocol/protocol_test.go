@@ -265,7 +265,7 @@ func TestBufSizeForConn(t *testing.T) {
 
 func TestCopyBufSize(t *testing.T) {
 	s := CopyBufSize(0)
-	if s < 64*1024 || s > 256*1024 {
+	if s < 8*1024 || s > 40*1024 {
 		t.Errorf("CopyBufSize(0)=%d", s)
 	}
 }
