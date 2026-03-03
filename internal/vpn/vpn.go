@@ -193,6 +193,7 @@ func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptio
 
 func (m *udpMux) onServerHello(serverAddr string, udpSupport bool, udpPort uint16) {
 	if !udpSupport || udpPort == 0 {
+		clientlog.Info("vpn: ServerHello udpSupport=%v udpPort=%d, skip", udpSupport, udpPort)
 		return
 	}
 	host, _, err := net.SplitHostPort(serverAddr)
@@ -377,7 +378,9 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			continue
 		}
 		udpSupport, udpPort, err := protocol.ReadServerHello(uc.r)
-		if err == nil && onServerHello != nil {
+		if err != nil {
+			clientlog.Warn("vpn: channel %d ReadServerHello failed: %v", id, err)
+		} else if onServerHello != nil {
 			onServerHello(c.RemoteAddr().String(), udpSupport, udpPort)
 		}
 		clientlog.Traffic("vpn: udp channel %d uses server %s", id, a)

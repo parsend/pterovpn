@@ -35,6 +35,10 @@ final class Config {
     return udpPort;
   }
 
+  int effectiveUdpPort() {
+    return udpPort > 0 ? udpPort : listenPorts.get(0) + 1;
+  }
+
   boolean debug() {
     return debug;
   }

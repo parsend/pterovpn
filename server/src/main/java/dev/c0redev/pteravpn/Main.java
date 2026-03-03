@@ -37,7 +37,7 @@ public final class Main {
     ExecutorService pool = Executors.newCachedThreadPool();
     ExecutorService pumpPool = Executors.newFixedThreadPool(pumpThreads);
     try (UdpSessions udp = new UdpSessions(cfg.udpChannels(), cfg.token());
-         DatagramSocket rawUdp = cfg.udpSupport() ? new DatagramSocket(cfg.udpPort() > 0 ? cfg.udpPort() : cfg.listenPorts().get(0) + 1) : null) {
+         DatagramSocket rawUdp = cfg.udpSupport() ? new DatagramSocket(cfg.effectiveUdpPort()) : null) {
       if (rawUdp != null) {
         log.info("Raw UDP listening on port " + rawUdp.getLocalPort());
         udp.setRawUdp(rawUdp);
