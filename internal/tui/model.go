@@ -1137,7 +1137,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectedMsg:
 		m.status = statusConnected
 		m.stop = msg.stop
-		m.udpSupportPort = 0
 		return m, runMonitorTick()
 	case disconnectedMsg:
 		m.status = statusDisconnected

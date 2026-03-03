@@ -132,7 +132,7 @@ func (r *rawUDPChan) Send(f protocol.UDPFrame) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.conn.WriteTo(obf, r.addr)
+	_, err = r.conn.(*net.UDPConn).Write(obf)
 	return err
 }
 

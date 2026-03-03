@@ -79,7 +79,7 @@ func CopyBufSize(slot int64) int {
 	if slot <= 0 {
 		slot = TimeSlot()
 	}
-	return 64*1024 + int(slot%4)*64*1024
+	return 8*1024 + int(slot%4)*8*1024
 }
 
 func ApplyTimeVariation(count, min, max int, slot int64) (int, int, int) {

@@ -120,8 +120,8 @@ final class ConnectionHandler implements Runnable {
             int r;
             while ((r = in.read(buf)) != -1) {
                 out.write(buf, 0, r);
+                out.flush();
             }
-            out.flush();
         } catch (IOException ignored) {
             log.fine("pump closed: " + ignored.getMessage());
         }
