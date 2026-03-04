@@ -21,6 +21,7 @@ final class Protocol {
   static final int MAX_TOKEN = 4096;
   static final int MAX_FRAME = 64 * 1024 + 64;
   static final int MAX_PAD = 32;
+  static final int MAX_OPTS = 512;
 
   static record HandshakeResult(Handshake handshake, Optional<ClientOptions> opts) {}
 
@@ -32,11 +33,25 @@ final class Protocol {
   }
 
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
+    if (!in.markSupported()) return Optional.empty();
     if (in.available() < 2) return Optional.empty();
+    in.mark(MAX_OPTS + 4);
     int optsLen = readU16(in);
-    if (optsLen <= 0 || optsLen > 512) return Optional.empty();
+    if (optsLen <= 0 || optsLen > MAX_OPTS) {
+      in.reset();
+      return Optional.empty();
+    }
+    if (in.available() < optsLen) {
+      in.reset();
+      return Optional.empty();
+    }
     byte[] buf = readN(in, optsLen);
-    return ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
+    Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
+    if (parsed.isEmpty()) {
+      in.reset();
+      return Optional.empty();
+    }
+    return parsed;
   }
 
   static void skipUntilMagic(InputStream in) throws IOException {

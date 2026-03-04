@@ -3,6 +3,7 @@ package dev.c0redev.pteravpn;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.util.Optional;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
@@ -24,6 +25,9 @@ final class UdpSessions implements AutoCloseable {
   private final Selector selector;
   private final Thread selectorThread;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private static final int UDP_BUFFER_SIZE = 64 * 1024;
+  private static final int WRITE_RETRY_DELAY_MS = 2;
+  private static final int WRITE_TIMEOUT_MS = 2_000;
 
   UdpSessions(int channels) throws IOException {
     this.writers = new UdpChannelWriter[channels];
@@ -35,6 +39,10 @@ final class UdpSessions implements AutoCloseable {
 
   void setWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
     if (channelId < 0 || channelId >= writers.length) throw new IllegalArgumentException("bad channel");
+    UdpChannelWriter prev = writers[channelId];
+    if (prev != null) {
+      prev.close();
+    }
     writers[channelId] = new UdpChannelWriter(channelId, out, opts);
   }
 
@@ -51,12 +59,19 @@ final class UdpSessions implements AutoCloseable {
         s = created;
       }
     }
-    s.send(f.payload());
+    try {
+      s.send(f.payload());
+    } catch (IOException e) {
+      closeSession(k, s);
+      throw e;
+    }
   }
 
   private Session createSession(int channelId, Key k, Protocol.UdpFrame f) throws IOException {
     DatagramChannel dc = DatagramChannel.open();
     dc.configureBlocking(false);
+    dc.setOption(StandardSocketOptions.SO_RCVBUF, 1 << 20);
+    dc.setOption(StandardSocketOptions.SO_SNDBUF, 1 << 20);
     dc.connect(new InetSocketAddress(f.dst(), f.dstPort()));
     SelectionKey sk = dc.register(selector, SelectionKey.OP_READ);
     Session s = new Session(channelId, k, f.dst(), dc, sk);
@@ -66,7 +81,7 @@ final class UdpSessions implements AutoCloseable {
   }
 
   private void selectLoop() {
-    ByteBuffer buf = ByteBuffer.allocateDirect(64 * 1024);
+    ByteBuffer buf = ByteBuffer.allocateDirect(UDP_BUFFER_SIZE);
     while (!closed.get()) {
       try {
         int n = selector.select(1000);
@@ -75,15 +90,26 @@ final class UdpSessions implements AutoCloseable {
           if (!k.isValid() || !k.isReadable()) continue;
           Object a = k.attachment();
           if (!(a instanceof Session s)) continue;
-          buf.clear();
-          int r = s.dc.read(buf);
-          if (r <= 0) continue;
-          buf.flip();
-          byte[] payload = new byte[buf.remaining()];
-          buf.get(payload);
-          UdpChannelWriter w = writers[s.channelId];
-          if (w == null) continue;
-          w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+          try {
+            while (true) {
+              buf.clear();
+              int r = s.dc.read(buf);
+              if (r < 0) {
+                closeSession(s.key, s);
+                break;
+              }
+              if (r == 0) break;
+              buf.flip();
+              byte[] payload = new byte[buf.remaining()];
+              buf.get(payload);
+              UdpChannelWriter w = writers[s.channelId];
+              if (w == null) continue;
+              w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+            }
+          } catch (IOException e) {
+            log.warning("udp read failed for key=" + s.key.srcPort + ":" + s.key.dstPort + " - " + e.getMessage());
+            closeSession(s.key, s);
+          }
         }
         selector.selectedKeys().clear();
       } catch (IOException e) {
@@ -98,10 +124,12 @@ final class UdpSessions implements AutoCloseable {
     for (Session s : sessions.values()) {
       try { s.close(); } catch (IOException ignored) {}
     }
+    sessions.clear();
     for (UdpChannelWriter w : writers) {
       if (w == null) continue;
       w.close();
     }
+    Arrays.fill(writers, null);
     try { selector.wakeup(); } catch (Exception ignored) {}
     try { selector.close(); } catch (Exception ignored) {}
   }
@@ -122,7 +150,21 @@ final class UdpSessions implements AutoCloseable {
     }
 
     void send(byte[] payload) throws IOException {
-      dc.write(ByteBuffer.wrap(payload));
+      ByteBuffer bb = ByteBuffer.wrap(payload);
+      synchronized (this) {
+        long timeoutAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WRITE_TIMEOUT_MS);
+        while (bb.hasRemaining()) {
+          int w = dc.write(bb);
+          if (w > 0) continue;
+          if (System.nanoTime() >= timeoutAt) throw new IOException("udp send timeout");
+          try {
+            TimeUnit.MILLISECONDS.sleep(WRITE_RETRY_DELAY_MS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("udp send interrupted", e);
+          }
+        }
+      }
     }
 
     @Override
@@ -166,6 +208,7 @@ final class UdpSessions implements AutoCloseable {
           }
         } catch (InterruptedException ignored) {
         } catch (IOException ignored) {
+          closed.set(true);
         }
       }
     }
@@ -174,7 +217,20 @@ final class UdpSessions implements AutoCloseable {
     public void close() {
       closed.set(true);
       t.interrupt();
+      try {
+        t.join(5000);
+      } catch (InterruptedException ignored) {
+        Thread.currentThread().interrupt();
+      }
     }
+  }
+
+  private void closeSession(Key key, Session s) {
+    Session removed = sessions.remove(key);
+    if (removed != s) return;
+    try {
+      removed.close();
+    } catch (IOException ignored) {}
   }
 
   private static final class Key {

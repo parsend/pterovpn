@@ -13,6 +13,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.logging.Logger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ConnectionHandler implements Runnable {
 
@@ -101,9 +102,19 @@ final class ConnectionHandler implements Runnable {
             InputStream rin = remote.getInputStream();
             OutputStream rout = remote.getOutputStream();
             OutputStream cout = out;
+            AtomicBoolean closed = new AtomicBoolean(false);
+            Runnable closeBoth = () -> {
+                if (!closed.compareAndSet(false, true)) return;
+                try {
+                    remote.close();
+                } catch (IOException ignored) {}
+                try {
+                    sock.close();
+                } catch (IOException ignored) {}
+            };
 
-            Future<?> f1 = pumpPool.submit(() -> pump(in, rout));
-            Future<?> f2 = pumpPool.submit(() -> pump(rin, cout));
+            Future<?> f1 = pumpPool.submit(() -> pump(in, rout, closeBoth));
+            Future<?> f2 = pumpPool.submit(() -> pump(rin, cout, closeBoth));
             try {
                 f1.get();
             } catch (Exception ignored) {}
@@ -113,7 +124,7 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private static void pump(InputStream in, OutputStream out) {
+    private static void pump(InputStream in, OutputStream out, Runnable onClose) {
         byte[] buf = new byte[32 * 1024];
         try {
             int r;
@@ -123,6 +134,10 @@ final class ConnectionHandler implements Runnable {
             out.flush();
         } catch (IOException ignored) {
             log.fine("pump closed: " + ignored.getMessage());
+        } finally {
+            if (onClose != null) {
+                onClose.run();
+            }
         }
     }
 }
