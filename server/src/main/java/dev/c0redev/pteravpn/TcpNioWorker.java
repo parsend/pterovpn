@@ -65,14 +65,17 @@ final class TcpNioWorker implements AutoCloseable, Runnable {
           if (!(attachment instanceof TcpSession session)) {
             continue;
           }
-          if (key.isConnectable()) {
-            session.onConnectable();
-          }
-          if (key.isReadable()) {
-            session.onReadable(key);
-          }
-          if (key.isWritable()) {
-            session.onWritable(key);
+          try {
+            if (key.isConnectable()) {
+              session.onConnectable();
+            }
+            if (key.isReadable()) {
+              session.onReadable(key);
+            }
+            if (key.isWritable()) {
+              session.onWritable(key);
+            }
+          } catch (CancelledKeyException ignored) {
           }
         }
         for (SelectionKey key : selector.keys()) {
