@@ -2,6 +2,7 @@ package obfuscate
 
 import (
 	"crypto/sha256"
+	"io"
 	"net"
 	"sync"
 )
@@ -31,13 +32,43 @@ var writeBufPool = sync.Pool{
 func (c *xorConn) Write(p []byte) (n int, err error) {
 	buf := writeBufPool.Get().(*[]byte)
 	defer writeBufPool.Put(buf)
-	if cap(*buf) < len(p) {
-		*buf = make([]byte, len(p)*2)
+	if len(p) == 0 {
+		return 0, nil
 	}
-	b := (*buf)[:len(p)]
-	copy(b, p)
-	xorBytes(b, c.key, &c.wPos)
-	return c.Conn.Write(b)
+
+	if cap(*buf) < len(p) {
+		size := len(p)
+		if size < 32*1024 {
+			size = 32 * 1024
+		}
+		*buf = make([]byte, size)
+	}
+
+	total := 0
+	for len(p) > 0 {
+		chunkLen := len(p)
+		if chunkLen > len(*buf) {
+			chunkLen = len(*buf)
+		}
+		b := (*buf)[:chunkLen]
+		copy(b, p[:chunkLen])
+		xorBytes(b, c.key, &c.wPos)
+		w, e := c.Conn.Write(b)
+		if w > 0 {
+			total += w
+			if w < chunkLen {
+				c.wPos -= (chunkLen - w)
+			}
+			p = p[w:]
+		}
+		if e != nil {
+			return total, e
+		}
+		if w == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
 }
 
 func xorBytes(b, key []byte, pos *int) {
