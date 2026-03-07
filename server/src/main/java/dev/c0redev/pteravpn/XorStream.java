@@ -5,6 +5,7 @@ import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -23,16 +24,19 @@ final class XorStream {
       public int read() throws IOException {
         int b = in.read();
         if (b == -1) return -1;
-        int v = (b ^ key[rPos % key.length]) & 0xff;
+        int k = key[rPos % key.length] & 0xff;
         rPos++;
-        return v;
+        return (b ^ k) & 0xff;
       }
 
       @Override
       public int read(byte[] b, int off, int len) throws IOException {
         int n = in.read(b, off, len);
         if (n <= 0) return n;
-        decode(b, off, n);
+        for (int i = 0; i < n; i++) {
+          b[off + i] ^= key[rPos % key.length];
+          rPos++;
+        }
         return n;
       }
     };
@@ -48,32 +52,34 @@ final class XorStream {
 
       @Override
       public void write(byte[] b, int off, int len) throws IOException {
-        int start = wPos;
-        encode(b, off, len);
+        for (int i = 0; i < len; i++) {
+          b[off + i] ^= key[(wPos + i) % key.length];
+        }
+        wPos += len;
         out.write(b, off, len);
-        restoreWrite(b, off, len, start);
+        for (int i = 0; i < len; i++) {
+          b[off + i] ^= key[(wPos - len + i) % key.length];
+        }
       }
     };
   }
 
-  void decode(byte[] b, int off, int len) {
+  static int xorInPlace(byte[] buf, int pos, int len, byte[] key) {
     for (int i = 0; i < len; i++) {
-      b[off + i] ^= key[rPos % key.length];
-      rPos++;
+      buf[i] = (byte) (buf[i] ^ key[pos % key.length]);
+      pos++;
     }
+    return pos;
   }
 
-  void encode(byte[] b, int off, int len) {
-    for (int i = 0; i < len; i++) {
-      b[off + i] ^= key[(wPos + i) % key.length];
+  static int xorInPlace(ByteBuffer buf, int pos, byte[] key) {
+    int i = buf.position();
+    while (i < buf.limit()) {
+      buf.put(i, (byte) (buf.get(i) ^ key[pos % key.length]));
+      pos++;
+      i++;
     }
-    wPos += len;
-  }
-
-  void restoreWrite(byte[] b, int off, int len, int start) {
-    for (int i = 0; i < len; i++) {
-      b[off + i] ^= key[(start + i) % key.length];
-    }
+    return pos;
   }
 
   static byte[] keyFromToken(String token) {

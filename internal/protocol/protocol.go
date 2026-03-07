@@ -25,9 +25,9 @@ const (
 
 	roleUDP = 1
 	roleTCP = 2
+	roleLog = 3
 
 	msgUDP = 1
-	msgLog = 2
 
 	addrV4 = 4
 	addrV6 = 6
@@ -393,41 +393,22 @@ type UDPFrame struct {
 }
 
 func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
-	kind, buf, err := ReadServerFrame(r)
+	flen, err := readU32(r)
 	if err != nil {
 		return UDPFrame{}, err
 	}
-	if kind != msgUDP {
-		return UDPFrame{}, errors.New("bad msg")
-	}
-	return parseUDPFrame(buf)
-}
-
-func ReadServerFrame(r *bufio.Reader) (byte, []byte, error) {
-	flen, err := readU32(r)
-	if err != nil {
-		return 0, nil, err
-	}
-	if flen < 1 || flen > (64*1024+64) {
-		return 0, nil, errors.New("bad frame len")
+	if flen < 2 || flen > (64*1024+64) {
+		return UDPFrame{}, errors.New("bad frame len")
 	}
 	buf := make([]byte, flen)
 	if _, err := io.ReadFull(r, buf); err != nil {
-		return 0, nil, err
+		return UDPFrame{}, err
 	}
-	return buf[0], buf[1:], nil
-}
-
-func ParseUDPFramePayload(payload []byte) (UDPFrame, error) {
-	return parseUDPFrame(payload)
-}
-
-func parseUDPFrame(buf []byte) (UDPFrame, error) {
-	if len(buf) < 1 {
-		return UDPFrame{}, errors.New("short frame")
+	if buf[0] != msgUDP {
+		return UDPFrame{}, errors.New("bad msg")
 	}
-	at := buf[0]
-	off := 1
+	at := buf[1]
+	off := 2
 	if len(buf) < off+2 {
 		return UDPFrame{}, errors.New("short frame")
 	}
@@ -446,9 +427,6 @@ func parseUDPFrame(buf []byte) (UDPFrame, error) {
 	off += ipLen
 	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
 	off += 2
-	if len(buf) == off {
-		return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort}, nil
-	}
 	padLen := int(buf[len(buf)-1] & 0xff)
 	if padLen > 64 || len(buf)-1-padLen < off {
 		return UDPFrame{}, errors.New("bad pad len")
@@ -457,30 +435,6 @@ func parseUDPFrame(buf []byte) (UDPFrame, error) {
 	payload := make([]byte, payEnd-off)
 	copy(payload, buf[off:payEnd])
 	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
-}
-
-func WriteServerFrame(w *bufio.Writer, kind byte, payload []byte) error {
-	if payload == nil {
-		payload = []byte{}
-	}
-	if len(payload) > 64*1024 {
-		payload = payload[:64*1024]
-	}
-	flen := len(payload) + 1
-	if err := writeU32(w, uint32(flen)); err != nil {
-		return err
-	}
-	if err := w.WriteByte(kind); err != nil {
-		return err
-	}
-	if _, err := w.Write(payload); err != nil {
-		return err
-	}
-	return w.Flush()
-}
-
-func WriteServerLog(w *bufio.Writer, msg string) error {
-	return WriteServerFrame(w, msgLog, []byte(msg))
 }
 
 func WriteUDPFrame(w *bufio.Writer, f UDPFrame) error {
@@ -544,6 +498,7 @@ func randPadLenN(m int) int {
 
 func RoleUDP() byte { return roleUDP }
 func RoleTCP() byte { return roleTCP }
+func RoleLog() byte { return roleLog }
 
 func normalizeIP(ip net.IP) (byte, []byte, error) {
 	if v4 := ip.To4(); v4 != nil {

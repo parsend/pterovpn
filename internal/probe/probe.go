@@ -53,7 +53,7 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 	junkCount, junkMin, junkMax := 2, 64, 512
 	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
 	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() })
-	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, badToken); err != nil {
+	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleUDP(), 0, badToken, 0, []byte("{}"), protocol.TimeSlot()); err != nil {
 		log.Printf("probe: handshake write: %v", err)
 		return false, err
 	}

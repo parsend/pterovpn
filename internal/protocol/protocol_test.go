@@ -16,6 +16,7 @@ func TestHandshakeRoundtrip(t *testing.T) {
 		{RoleTCP(), 0, "x"},
 		{RoleUDP(), 3, "secret"},
 		{RoleUDP(), 0, ""},
+		{RoleLog(), 0, "x"},
 	} {
 		var buf bytes.Buffer
 		w := bufio.NewWriter(&buf)

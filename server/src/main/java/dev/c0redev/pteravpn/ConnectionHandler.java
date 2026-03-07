@@ -5,11 +5,15 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.logging.Logger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ConnectionHandler implements Runnable {
 
@@ -18,24 +22,38 @@ final class ConnectionHandler implements Runnable {
     private final Socket sock;
     private final Config cfg;
     private final UdpSessions udp;
-    private final TcpRelay tcpRelay;
+    private final ExecutorService pumpPool;
+    private final Protocol.HandshakeResult preParsed;
+    private final byte[] preReadPrefix;
 
-    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, TcpRelay tcpRelay) {
+    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, ExecutorService pumpPool) {
+        this(sock, cfg, udp, pumpPool, null, null);
+    }
+
+    ConnectionHandler(
+        Socket sock,
+        Config cfg,
+        UdpSessions udp,
+        ExecutorService pumpPool,
+        Protocol.HandshakeResult preParsed,
+        byte[] preReadPrefix
+    ) {
         this.sock = sock;
         this.cfg = cfg;
         this.udp = udp;
-        this.tcpRelay = tcpRelay;
+        this.pumpPool = pumpPool;
+        this.preParsed = preParsed;
+        this.preReadPrefix = preReadPrefix;
     }
 
     @Override
     public void run() {
-        boolean handoff = false;
-        try {
+        try (Socket s = sock) {
             var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
-            InputStream in = xor.wrapInput(new BufferedInputStream(sock.getInputStream()));
-            OutputStream out = xor.wrapOutput(sock.getOutputStream());
-
-            Protocol.HandshakeResult hr = Protocol.readHandshake(in);
+            InputStream socketIn = xor.wrapInput(new BufferedInputStream(s.getInputStream()));
+            InputStream in = preReadPrefix == null ? socketIn : new PrefixedInputStream(preReadPrefix, socketIn);
+            OutputStream out = xor.wrapOutput(s.getOutputStream());
+            Protocol.HandshakeResult hr = preParsed == null ? Protocol.readHandshake(in) : preParsed;
             Protocol.Handshake hs = hr.handshake();
             if (
                 !MessageDigest.isEqual(
@@ -49,36 +67,32 @@ final class ConnectionHandler implements Runnable {
                 "Accepted role=" +
                     hs.role() +
                     " from " +
-                sock.getRemoteSocketAddress()
+                    s.getRemoteSocketAddress()
             );
 
             if (hs.role() == Protocol.ROLE_UDP) {
-                handleUdp(hs.channelId(), in, out, hr.opts());
+                handleUdp(hr, in, out);
                 return;
             }
             if (hs.role() == Protocol.ROLE_TCP) {
-                Protocol.TcpConnect tcp = Protocol.readTcpConnect(in);
-                handoff = handleTcp(tcp, xor);
+                handleTcp(in, out);
+                return;
+            }
+            if (hs.role() == Protocol.ROLE_LOG) {
+                handleLog(in, out);
                 return;
             }
             throw new IOException("bad role");
         } catch (EOFException ignored) {
         } catch (IOException e) {
             log.fine("conn closed: " + e.getMessage());
-        } catch (RuntimeException e) {
-            log.fine("conn protocol error: " + e.getMessage());
-        } finally {
-            if (!handoff) {
-                try {
-                    sock.close();
-                } catch (IOException ignored) {
-                }
-            }
         }
     }
 
-    private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)
+    private void handleUdp(Protocol.HandshakeResult hr, InputStream in, OutputStream out)
         throws IOException {
+        int channelId = hr.handshake().channelId();
+        Optional<Protocol.ClientOptions> opts = hr.opts();
         if (
             channelId < 0 || channelId >= cfg.udpChannels()
         ) throw new IOException("bad udp channel");
@@ -95,12 +109,97 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private boolean handleTcp(Protocol.TcpConnect tcp, XorStream xor)
-        throws IOException {
-        if (sock.getChannel() == null) {
-            throw new IOException("client socket channel unavailable");
+    private static final class PrefixedInputStream extends InputStream {
+        private final byte[] prefix;
+        private int prefixPos;
+        private final InputStream delegate;
+
+        PrefixedInputStream(byte[] prefix, InputStream delegate) {
+            this.prefix = prefix == null ? new byte[0] : prefix;
+            this.delegate = delegate;
         }
-        tcpRelay.register(sock.getChannel(), tcp.ip(), tcp.port(), xor);
-        return true;
+
+        @Override
+        public int read() throws IOException {
+            if (prefixPos < prefix.length) {
+                return prefix[prefixPos++] & 0xff;
+            }
+            return delegate.read();
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (prefixPos < prefix.length) {
+                int n = Math.min(len, prefix.length - prefixPos);
+                System.arraycopy(prefix, prefixPos, b, off, n);
+                prefixPos += n;
+                if (n == len) {
+                    return n;
+                }
+                int tail = delegate.read(b, off + n, len - n);
+                return tail < 0 ? n : n + tail;
+            }
+            return delegate.read(b, off, len);
+        }
+    }
+
+    private void handleTcp(InputStream in, OutputStream out)
+        throws IOException {
+        Protocol.TcpConnect c = Protocol.readTcpConnect(in);
+        log.info("TCP connect to " + c.ip().getHostAddress() + ":" + c.port());
+        try (Socket remote = new Socket()) {
+            remote.setTcpNoDelay(true);
+            remote.setKeepAlive(true);
+            remote.connect(new InetSocketAddress(c.ip(), c.port()), 10_000);
+
+            InputStream rin = remote.getInputStream();
+            OutputStream rout = remote.getOutputStream();
+            OutputStream cout = out;
+            AtomicBoolean closed = new AtomicBoolean(false);
+            Runnable closeBoth = () -> {
+                if (!closed.compareAndSet(false, true)) return;
+                try {
+                    remote.close();
+                } catch (IOException ignored) {}
+                try {
+                    sock.close();
+                } catch (IOException ignored) {}
+            };
+
+            Future<?> f1 = pumpPool.submit(() -> pump(in, rout, closeBoth));
+            Future<?> f2 = pumpPool.submit(() -> pump(rin, cout, closeBoth));
+            try {
+                f1.get();
+            } catch (Exception ignored) {}
+            try {
+                f2.get();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void handleLog(InputStream in, OutputStream out) throws IOException {
+        log.info("Log channel from " + sock.getRemoteSocketAddress());
+        try (var subscription = ServerLogHub.subscribe(out)) {
+            byte[] buf = new byte[1];
+            while (in.read(buf) != -1) {
+            }
+        }
+    }
+
+    private static void pump(InputStream in, OutputStream out, Runnable onClose) {
+        byte[] buf = new byte[32 * 1024];
+        try {
+            int r;
+            while ((r = in.read(buf)) != -1) {
+                out.write(buf, 0, r);
+            }
+            out.flush();
+        } catch (IOException ignored) {
+            log.fine("pump closed: " + ignored.getMessage());
+        } finally {
+            if (onClose != null) {
+                onClose.run();
+            }
+        }
     }
 }

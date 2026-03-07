@@ -5,44 +5,36 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.StandardSocketOptions;
 import java.util.Optional;
-import java.util.ArrayDeque;
-import java.util.Deque;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
-import java.lang.management.ManagementFactory;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Logger;
 
 final class UdpSessions implements AutoCloseable {
   private final Logger log = Log.logger(UdpSessions.class);
+  private static final AtomicLong ACTIVE = new AtomicLong();
+  private static final AtomicLong FRAMES_IN = new AtomicLong();
+  private static final AtomicLong FRAMES_OUT = new AtomicLong();
+  private static final AtomicLong LOSS = new AtomicLong();
+  private static final AtomicLong IN_BYTES = new AtomicLong();
+  private static final AtomicLong OUT_BYTES = new AtomicLong();
   private final Map<Key, Session> sessions = new ConcurrentHashMap<>();
   private final UdpChannelWriter[] writers;
   private final Selector selector;
   private final Thread selectorThread;
   private final AtomicBoolean closed = new AtomicBoolean(false);
-  private final LongAdder opWriteEnable = new LongAdder();
-  private final LongAdder opWriteDisable = new LongAdder();
-  private final LongAdder opWriteFired = new LongAdder();
-  private final LongAdder queueOverflow = new LongAdder();
-  private final LongAdder queueDrops = new LongAdder();
-  private final LongAdder udpQueueBytes = new LongAdder();
-  private final LongAdder udpQueueFrames = new LongAdder();
-  private final LongAdder udpBytesOut = new LongAdder();
-  private final LongAdder udpBytesIn = new LongAdder();
-  private final long metricsIntervalMs = 1000L;
-  private long lastMetricsAt;
   private static final int UDP_BUFFER_SIZE = 64 * 1024;
-  private static final int UDP_SESSION_QUEUE_CAPACITY = 1024;
-  private static final int UDP_SESSION_QUEUE_BYTES = 1024 * 1024;
-  private static final int UDP_CHANNEL_QUEUE_CAPACITY = 2048;
+  private static final int WRITE_RETRY_DELAY_MS = 2;
+  private static final int WRITE_TIMEOUT_MS = 2_000;
 
   UdpSessions(int channels) throws IOException {
     this.writers = new UdpChannelWriter[channels];
@@ -50,83 +42,6 @@ final class UdpSessions implements AutoCloseable {
     this.selectorThread = new Thread(this::selectLoop, "udp-selector");
     this.selectorThread.setDaemon(true);
     this.selectorThread.start();
-    this.lastMetricsAt = System.currentTimeMillis();
-  }
-
-  void publishServerLog(String line) {
-    if (line == null || line.isEmpty()) {
-      return;
-    }
-    final String msg = "[UDP] " + line;
-    for (UdpChannelWriter w : writers) {
-      if (w == null) continue;
-      w.sendLog(msg);
-    }
-  }
-
-  private void publishUdpMetrics() {
-    long now = System.currentTimeMillis();
-    if ((now - lastMetricsAt) < metricsIntervalMs) {
-      return;
-    }
-    long opWriteFiredDelta = opWriteFired.sumThenReset();
-    long queueDropsDelta = queueDrops.sumThenReset();
-    long bytesOutDelta = udpBytesOut.sumThenReset();
-    long bytesInDelta = udpBytesIn.sumThenReset();
-    long overflows = queueOverflow.sumThenReset();
-    if (
-      opWriteFiredDelta == 0 &&
-      queueDropsDelta == 0 &&
-      bytesOutDelta == 0 &&
-      bytesInDelta == 0 &&
-      overflows == 0 &&
-      udpQueueFrames.sum() == 0 &&
-      udpQueueBytes.sum() == 0
-    ) {
-      return;
-    }
-    long intervalMs = Math.max(1L, now - lastMetricsAt);
-    long avgOutPerSec = bytesOutDelta * 1000L / intervalMs;
-    long avgInPerSec = bytesInDelta * 1000L / intervalMs;
-    long mem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-    long memLimit = Runtime.getRuntime().maxMemory();
-    String load = "-";
-    try {
-      load = String.format("%.2f", ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage());
-    } catch (Throwable ignored) {}
-    publishServerLog(
-      "metrics opWriteEnable=" +
-        opWriteEnable.sum() +
-        " opWriteFire=" +
-        opWriteFiredDelta +
-        " opWriteDisable=" +
-        opWriteDisable.sum() +
-        " qSize=" +
-        udpQueueFrames.sum() +
-        "/" +
-        udpQueueBytes.sum() +
-        " qDrops=" +
-        queueDropsDelta +
-        " qOverflow=" +
-        overflows +
-        " in=" +
-        bytesInDelta +
-        " out=" +
-        bytesOutDelta +
-        " avgInPs=" +
-        avgInPerSec +
-        " avgOutPs=" +
-        avgOutPerSec +
-        " memMb=" +
-        (mem / (1024 * 1024)) +
-        "/" +
-        (memLimit / (1024 * 1024)) +
-        " load=" +
-        load +
-        " sessions=" +
-        sessions.size()
-    );
-    lastMetricsAt = now;
   }
 
   void setWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
@@ -153,9 +68,12 @@ final class UdpSessions implements AutoCloseable {
     }
     try {
       s.send(f.payload());
-      udpBytesIn.add(f.payload().length);
+      FRAMES_IN.incrementAndGet();
+      IN_BYTES.addAndGet(f.payload().length);
     } catch (IOException e) {
       closeSession(k, s);
+      LOSS.incrementAndGet();
+      ServerLogHub.emit("udp loss %d->%s:%d send failed: %s".formatted(f.srcPort(), f.dst(), f.dstPort(), e.getMessage()));
       throw e;
     }
   }
@@ -173,24 +91,21 @@ final class UdpSessions implements AutoCloseable {
     return s;
   }
 
+  static Stats snapshot() {
+    return new Stats(ACTIVE.get(), FRAMES_IN.get(), FRAMES_OUT.get(), IN_BYTES.get(), OUT_BYTES.get(), LOSS.get());
+  }
+
   private void selectLoop() {
     ByteBuffer buf = ByteBuffer.allocateDirect(UDP_BUFFER_SIZE);
     while (!closed.get()) {
       try {
-        int n = selector.select(200);
+        int n = selector.select(1000);
         if (n == 0) continue;
         for (SelectionKey k : selector.selectedKeys()) {
-          if (!k.isValid()) continue;
+          if (!k.isValid() || !k.isReadable()) continue;
           Object a = k.attachment();
           if (!(a instanceof Session s)) continue;
           try {
-            if (k.isWritable()) {
-              opWriteFired.increment();
-              synchronized (s) {
-                s.flushWrites();
-              }
-            }
-            if (!k.isReadable()) continue;
             while (true) {
               buf.clear();
               int r = s.dc.read(buf);
@@ -202,10 +117,15 @@ final class UdpSessions implements AutoCloseable {
               buf.flip();
               byte[] payload = new byte[buf.remaining()];
               buf.get(payload);
+              FRAMES_OUT.incrementAndGet();
+              OUT_BYTES.addAndGet(payload.length);
               UdpChannelWriter w = writers[s.channelId];
-              if (w == null) continue;
+              if (w == null) {
+                LOSS.incrementAndGet();
+                ServerLogHub.emit("udp loss %d->?:%d no channel writer".formatted(s.key.srcPort, s.key.dstPort));
+                continue;
+              }
               w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
-              udpBytesOut.add(payload.length);
             }
           } catch (IOException e) {
             log.warning("udp read failed for key=" + s.key.srcPort + ":" + s.key.dstPort + " - " + e.getMessage());
@@ -213,7 +133,6 @@ final class UdpSessions implements AutoCloseable {
           }
         }
         selector.selectedKeys().clear();
-        publishUdpMetrics();
       } catch (IOException e) {
         log.warning("udp selector error: " + e.getMessage());
       }
@@ -236,14 +155,13 @@ final class UdpSessions implements AutoCloseable {
     try { selector.close(); } catch (Exception ignored) {}
   }
 
-  private final class Session implements AutoCloseable {
+  private static final class Session implements AutoCloseable {
     final int channelId;
     final Key key;
     final java.net.InetAddress dst;
     final DatagramChannel dc;
     final SelectionKey sk;
-    private final Deque<ByteBuffer> pendingWrites = new ArrayDeque<>();
-    private int pendingBytes;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     Session(int channelId, Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk) {
       this.channelId = channelId;
@@ -251,135 +169,44 @@ final class UdpSessions implements AutoCloseable {
       this.dst = dst;
       this.dc = dc;
       this.sk = sk;
+      ACTIVE.incrementAndGet();
+      ServerLogHub.emit("udp session opened " + key.srcPort + "->" + dst + ":" + key.dstPort);
     }
 
     void send(byte[] payload) throws IOException {
       ByteBuffer bb = ByteBuffer.wrap(payload);
       synchronized (this) {
-        if (!pendingWrites.isEmpty()) {
-          if (!queuePayload(bb)) {
-            return;
-          }
-          requestWriteInterest();
-          return;
-        }
-
+        long timeoutAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WRITE_TIMEOUT_MS);
         while (bb.hasRemaining()) {
           int w = dc.write(bb);
-          if (w > 0) {
-            continue;
+          if (w > 0) continue;
+          if (System.nanoTime() >= timeoutAt) throw new IOException("udp send timeout");
+          try {
+            TimeUnit.MILLISECONDS.sleep(WRITE_RETRY_DELAY_MS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("udp send interrupted", e);
           }
-          if (!queuePayload(bb)) {
-            return;
-          }
-          requestWriteInterest();
-          return;
         }
       }
-    }
-
-    void flushWrites() throws IOException {
-      if (pendingWrites.isEmpty()) return;
-      while (true) {
-        ByteBuffer buf = pendingWrites.peekFirst();
-        if (buf == null) break;
-        int before = buf.remaining();
-        int w = dc.write(buf);
-        if (w <= 0) break;
-        if (w >= before) {
-          pendingWrites.pollFirst();
-          pendingBytes -= before;
-          udpQueueBytes.add(-before);
-          udpQueueFrames.decrement();
-          continue;
-        }
-        pendingBytes -= w;
-        break;
-      }
-      if (pendingWrites.isEmpty()) {
-        disableWriteInterest();
-      }
-    }
-
-    private void requestWriteInterest() {
-      if (!sk.isValid()) return;
-      int ops = sk.interestOps();
-      if ((ops & SelectionKey.OP_WRITE) != 0) return;
-      sk.interestOps(ops | SelectionKey.OP_WRITE);
-      opWriteEnable.increment();
-      selector.wakeup();
-    }
-
-    private void disableWriteInterest() {
-      if (!sk.isValid()) return;
-      int ops = sk.interestOps();
-      int nextOps = ops & ~SelectionKey.OP_WRITE;
-      if (nextOps == ops) return;
-      sk.interestOps(nextOps);
-      opWriteDisable.increment();
-    }
-
-    private boolean queuePayload(ByteBuffer payload) {
-      int remaining = payload.remaining();
-      if (remaining <= 0) return true;
-      int dropped = 0;
-      while (
-        (pendingWrites.size() >= UDP_SESSION_QUEUE_CAPACITY || pendingBytes + remaining > UDP_SESSION_QUEUE_BYTES)
-          && !pendingWrites.isEmpty()
-      ) {
-        ByteBuffer removed = pendingWrites.pollFirst();
-        if (removed == null) break;
-        int removedBytes = removed.remaining();
-        pendingBytes -= removedBytes;
-        udpQueueBytes.add(-removedBytes);
-        udpQueueFrames.decrement();
-        queueDrops.increment();
-        dropped++;
-      }
-      if (remaining > UDP_SESSION_QUEUE_BYTES) {
-        log.warning("udp payload too large on key=" + key.srcPort + ":" + key.dstPort + ", drop packet");
-        return false;
-      }
-      if (dropped > 0) {
-        queueOverflow.increment();
-        log.warning(
-          "udp send queue overflow, dropped " + dropped + " packets on key=" +
-            key.srcPort +
-            ":" +
-            key.dstPort
-        );
-      }
-      pendingWrites.addLast(payload);
-      pendingBytes += remaining;
-      udpQueueBytes.add(remaining);
-      udpQueueFrames.increment();
-      return true;
     }
 
     @Override
     public void close() throws IOException {
-      try {
-        sk.cancel();
-      } catch (Exception ignored) {}
-      while (!pendingWrites.isEmpty()) {
-        ByteBuffer removed = pendingWrites.pollFirst();
-        if (removed == null) break;
-        int removedBytes = removed.remaining();
-        pendingBytes -= removedBytes;
-        udpQueueBytes.add(-removedBytes);
-        udpQueueFrames.decrement();
+      if (!closed.compareAndSet(false, true)) {
+        return;
       }
-      pendingWrites.clear();
-      pendingBytes = 0;
+      ACTIVE.decrementAndGet();
+      try { sk.cancel(); } catch (Exception ignored) {}
       dc.close();
     }
   }
 
-  private final class UdpChannelWriter implements AutoCloseable {
+  private static final class UdpChannelWriter implements AutoCloseable {
     private final int channelId;
     private final OutputStream out;
     private final Optional<Protocol.ClientOptions> opts;
-    private final LinkedBlockingQueue<LoggableFrame> q;
+    private final LinkedBlockingQueue<Protocol.UdpFrame> q = new LinkedBlockingQueue<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Thread t;
 
@@ -387,7 +214,6 @@ final class UdpSessions implements AutoCloseable {
       this.channelId = channelId;
       this.out = out;
       this.opts = opts != null ? opts : Optional.empty();
-      this.q = new LinkedBlockingQueue<>(UDP_CHANNEL_QUEUE_CAPACITY);
       this.t = new Thread(this::loop, "udp-writer-" + channelId);
       this.t.setDaemon(true);
       this.t.start();
@@ -395,43 +221,23 @@ final class UdpSessions implements AutoCloseable {
 
     void send(Protocol.UdpFrame f) {
       if (closed.get()) return;
-      if (f == null) return;
-      enqueue(new UdpDataFrame(f));
-    }
-
-    void sendLog(String line) {
-      if (closed.get()) return;
-      if (line == null || line.isEmpty()) return;
-      enqueue(new ServerLogFrame(line));
-    }
-
-    private void enqueue(LoggableFrame frame) {
-      if (q.offer(frame)) return;
-      LoggableFrame dropped = q.poll();
-      if (dropped == null || !q.offer(frame)) {
-        return;
-      }
-      log.warning(
-        "udp channel writer " + channelId + " dropped one frame to keep queue size under limit"
-      );
+      q.offer(f);
     }
 
     private void loop() {
       while (!closed.get()) {
         try {
-          LoggableFrame frame = q.take();
-          if (frame == null) continue;
+          Protocol.UdpFrame f = q.poll(1, TimeUnit.SECONDS);
+          if (f == null) continue;
           synchronized (out) {
-            if (frame instanceof UdpDataFrame u) {
-              int maxPad = opts.map(o -> o.padS4()).filter(p -> p > 0 && p <= 64).orElse(Protocol.MAX_PAD);
-              Protocol.writeUdpFrame(out, u.frame(), maxPad);
-              out.flush();
-            } else if (frame instanceof ServerLogFrame l) {
-              Protocol.writeServerLog(out, l.message());
-            }
+            int maxPad = opts.map(o -> o.padS4()).filter(p -> p > 0 && p <= 64).orElse(Protocol.MAX_PAD);
+            Protocol.writeUdpFrame(out, f, maxPad);
+            out.flush();
           }
         } catch (InterruptedException ignored) {
         } catch (IOException ignored) {
+          LOSS.incrementAndGet();
+          ServerLogHub.emit("udp loss write to channel %d failed".formatted(channelId));
           closed.set(true);
         }
       }
@@ -447,32 +253,6 @@ final class UdpSessions implements AutoCloseable {
         Thread.currentThread().interrupt();
       }
     }
-
-    private sealed interface LoggableFrame permits UdpDataFrame, ServerLogFrame {}
-
-    private static final class UdpDataFrame implements LoggableFrame {
-      private final Protocol.UdpFrame frame;
-
-      UdpDataFrame(Protocol.UdpFrame frame) {
-        this.frame = frame;
-      }
-
-      Protocol.UdpFrame frame() {
-        return frame;
-      }
-    }
-
-    private static final class ServerLogFrame implements LoggableFrame {
-      private final String message;
-
-      ServerLogFrame(String message) {
-        this.message = message;
-      }
-
-      String message() {
-        return message;
-      }
-    }
   }
 
   private void closeSession(Key key, Session s) {
@@ -481,6 +261,31 @@ final class UdpSessions implements AutoCloseable {
     try {
       removed.close();
     } catch (IOException ignored) {}
+  }
+
+  static final class Stats {
+    private final long active;
+    private final long in;
+    private final long out;
+    private final long inBytes;
+    private final long outBytes;
+    private final long loss;
+
+    Stats(long active, long in, long out, long inBytes, long outBytes, long loss) {
+      this.active = active;
+      this.in = in;
+      this.out = out;
+      this.inBytes = inBytes;
+      this.outBytes = outBytes;
+      this.loss = loss;
+    }
+
+    long active() { return active; }
+    long in() { return in; }
+    long out() { return out; }
+    long inBytes() { return inBytes; }
+    long outBytes() { return outBytes; }
+    long loss() { return loss; }
   }
 
   private static final class Key {

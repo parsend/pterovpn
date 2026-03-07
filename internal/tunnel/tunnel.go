@@ -63,7 +63,7 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 	if !strings.EqualFold(flushPolicy, "perChunk") {
 		_ = w.Flush()
 	}
-	var optsJSON []byte
+	optsJSON := []byte("{}")
 	if prot != nil {
 		optsJSON, _ = json.Marshal(prot)
 	}

@@ -5,8 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.io.BufferedInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.Optional;
 
@@ -15,8 +15,8 @@ final class Protocol {
   static final byte VERSION = 1;
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
+  static final byte ROLE_LOG = 3;
   static final byte MSG_UDP = 1;
-  static final byte MSG_LOG = 2;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
   static final int MAGIC_LEN = 5;
@@ -34,42 +34,185 @@ final class Protocol {
     return new HandshakeResult(hs, opts);
   }
 
-  static void writeServerLog(OutputStream out, String msg) throws IOException {
-    if (msg == null) {
-      msg = "";
-    }
-    byte[] payload = msg.getBytes(StandardCharsets.UTF_8);
-    if (payload.length > 65500) {
-      payload = java.util.Arrays.copyOf(payload, 65500);
-    }
-    writeU32(out, payload.length + 1);
-    out.write(MSG_LOG);
-    out.write(payload);
-    out.flush();
-  }
-
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
-    if (!(in instanceof BufferedInputStream bin)) return Optional.empty();
-    int available = bin.available();
-    if (available < 2) return Optional.empty();
-
-    bin.mark(MAX_OPTS + 2);
-    int optsLen = readU16(bin);
+    if (!in.markSupported()) return Optional.empty();
+    if (in.available() < 2) return Optional.empty();
+    in.mark(MAX_OPTS + 4);
+    int optsLen = readU16(in);
     if (optsLen <= 0 || optsLen > MAX_OPTS) {
-      bin.reset();
+      in.reset();
       return Optional.empty();
     }
-    if (bin.available() < optsLen) {
-      bin.reset();
+    if (in.available() < optsLen) {
+      in.reset();
       return Optional.empty();
     }
-    byte[] buf = readN(bin, optsLen);
+    byte[] buf = readN(in, optsLen);
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
     if (parsed.isEmpty()) {
-      bin.reset();
+      in.reset();
       return Optional.empty();
     }
     return parsed;
+  }
+
+  static final class HandshakeParser {
+    private enum Stage {
+      SEEK_MAGIC,
+      READ_VERSION,
+      READ_ROLE,
+      READ_TOKEN_LEN_HI,
+      READ_TOKEN_LEN_LO,
+      READ_TOKEN,
+      READ_CHANNEL_ID,
+      READ_OPTIONS,
+      DONE
+    }
+
+    private Stage stage = Stage.SEEK_MAGIC;
+    private int magicPos;
+    private int tokenLen;
+    private int tokenRead;
+    private byte[] tokenBytes;
+    private byte role;
+    private int channelId;
+    private Handshake hs;
+    private Optional<ClientOptions> opts = Optional.empty();
+    private HandshakeResult result;
+    private int optsLen = -1;
+    private int optsRead;
+    private byte[] optsBytes;
+
+    HandshakeResult read(ByteBuffer src) throws IOException {
+      while (src.hasRemaining() && stage != Stage.DONE) {
+        switch (stage) {
+          case SEEK_MAGIC -> {
+            byte b = src.get();
+            if (b == MAGIC[magicPos]) {
+              magicPos++;
+              if (magicPos >= MAGIC_LEN) {
+                stage = Stage.READ_VERSION;
+                break;
+              }
+              continue;
+            }
+            magicPos = b == MAGIC[0] ? 1 : 0;
+          }
+          case READ_VERSION -> {
+            int v = src.get() & 0xff;
+            if (v != VERSION) throw new IOException("bad version");
+            stage = Stage.READ_ROLE;
+          }
+          case READ_ROLE -> {
+            role = src.get();
+            if (role != ROLE_UDP && role != ROLE_TCP && role != ROLE_LOG) throw new IOException("bad role");
+            stage = Stage.READ_TOKEN_LEN_HI;
+          }
+          case READ_TOKEN_LEN_HI -> {
+            tokenLen = (src.get() & 0xff) << 8;
+            stage = Stage.READ_TOKEN_LEN_LO;
+          }
+          case READ_TOKEN_LEN_LO -> {
+            tokenLen |= src.get() & 0xff;
+            if (tokenLen < 0 || tokenLen > MAX_TOKEN) throw new IOException("bad token len");
+            tokenBytes = new byte[tokenLen];
+            tokenRead = 0;
+            stage = Stage.READ_TOKEN;
+          }
+          case READ_TOKEN -> {
+            int canRead = Math.min(tokenLen - tokenRead, src.remaining());
+            src.get(tokenBytes, tokenRead, canRead);
+            tokenRead += canRead;
+            if (tokenRead < tokenLen) return null;
+            stage = role == ROLE_UDP ? Stage.READ_CHANNEL_ID : Stage.READ_OPTIONS;
+            hs = new Handshake(role, role == ROLE_UDP ? 0 : -1, new String(tokenBytes, StandardCharsets.UTF_8));
+          }
+          case READ_CHANNEL_ID -> {
+            channelId = src.get() & 0xff;
+            hs = new Handshake(role, channelId, new String(tokenBytes, StandardCharsets.UTF_8));
+            stage = Stage.READ_OPTIONS;
+          }
+          case READ_OPTIONS -> {
+            if (optsLen < 0) {
+              if (src.remaining() < 2) return null;
+              src.mark();
+              int lenHi = src.get() & 0xff;
+              int lenLo = src.get() & 0xff;
+              optsLen = (lenHi << 8) | lenLo;
+              if (optsLen <= 0 || optsLen > MAX_OPTS) {
+                src.reset();
+                return done();
+              }
+              optsBytes = new byte[optsLen];
+              optsRead = 0;
+            }
+            int canRead = Math.min(optsLen - optsRead, src.remaining());
+            src.get(optsBytes, optsRead, canRead);
+            optsRead += canRead;
+            if (optsRead < optsLen) {
+              return null;
+            }
+            Optional<ClientOptions> parsed = ClientOptions.parse(new String(optsBytes, StandardCharsets.UTF_8));
+            if (parsed.isEmpty()) {
+              src.reset();
+              return done();
+            }
+            opts = parsed;
+            return done();
+          }
+          case DONE -> {
+            return result;
+          }
+        }
+      }
+      return null;
+    }
+
+    HandshakeResult done() {
+      if (result != null) return result;
+      stage = Stage.DONE;
+      result = new HandshakeResult(hs, opts);
+      return result;
+    }
+  }
+
+  static final class TcpConnectParser {
+    private static final int READ_ADDR_TYPE = 0;
+    private static final int READ_ADDR = 1;
+    private static final int READ_PORT = 2;
+
+    private int stage = READ_ADDR_TYPE;
+    private byte addrType;
+    private int ipLen;
+    private int ipRead;
+    private byte[] ip;
+    private int port;
+
+    TcpConnect read(ByteBuffer src) throws IOException {
+      while (src.hasRemaining()) {
+        if (stage == READ_ADDR_TYPE) {
+          addrType = src.get();
+          if (addrType != ADDR_V4 && addrType != ADDR_V6) throw new IOException("bad addr type");
+          ipLen = addrType == ADDR_V6 ? 16 : 4;
+          ip = new byte[ipLen];
+          ipRead = 0;
+          stage = READ_ADDR;
+        }
+        if (stage == READ_ADDR) {
+          int canRead = Math.min(ipLen - ipRead, src.remaining());
+          src.get(ip, ipRead, canRead);
+          ipRead += canRead;
+          if (ipRead < ipLen) return null;
+          stage = READ_PORT;
+        }
+        if (stage == READ_PORT) {
+          if (src.remaining() < 2) return null;
+          port = ((src.get() & 0xff) << 8) | (src.get() & 0xff);
+          return new TcpConnect(addrType, InetAddress.getByAddress(ip), port);
+        }
+      }
+      return null;
+    }
   }
 
   static void skipUntilMagic(InputStream in) throws IOException {
