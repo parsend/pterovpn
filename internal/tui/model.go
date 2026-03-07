@@ -148,6 +148,7 @@ type Model struct {
 	settingsInputs   []textinput.Model
 
 	updateAvailable string
+	changelogText  string
 
 	connectCount int
 }
@@ -535,6 +536,8 @@ type updateCheckMsg struct {
 	latest string
 }
 
+type changelogMsg string
+
 func LogMessage(s string) tea.Msg { return logMsg(s) }
 
 func runCheckUpdate(currentVersion string) tea.Cmd {
@@ -554,6 +557,16 @@ func runFetchCloud() tea.Cmd {
 			return cloudFetchedMsg{err: err.Error()}
 		}
 		return cloudFetchedMsg{cfgs: cfgs, names: names}
+	}
+}
+
+func runFetchChangelog() tea.Cmd {
+	return func() tea.Msg {
+		changelog, err := update.Changelog(40)
+		if err != nil || changelog == "" {
+			return nil
+		}
+		return changelogMsg(changelog)
 	}
 }
 
@@ -627,7 +640,12 @@ func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version), runFetchCloud()}
+	cmds := []tea.Cmd{
+		autoProbeCmds(m.cfgs, m.names),
+		runCheckUpdate(m.opts.Version),
+		runFetchCloud(),
+		runFetchChangelog(),
+	}
 	if len(m.cloudCfgs) > 0 {
 		cmds = append(cmds, runGeoFetches(m.cloudCfgs))
 	}
@@ -1110,6 +1128,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest
 		return m, nil
+	case changelogMsg:
+		m.changelogText = string(msg)
+		return m, nil
 	case cloudFetchedMsg:
 		m.cloudLoading = false
 		if msg.err != "" {
@@ -1489,6 +1510,24 @@ func (m Model) View() string {
 			m.logViewport.GotoBottom()
 		}
 		content.WriteString(m.logViewport.View())
+		if m.changelogText != "" {
+			content.WriteString("\n\n")
+			content.WriteString(titleStyle.Render("Changelog (GitHub)"))
+			content.WriteString("\n")
+			lines := strings.Split(strings.TrimSpace(m.changelogText), "\n")
+			if len(lines) > 12 {
+				lines = lines[:12]
+				lines = append(lines, "...")
+			}
+			if len(lines) == 0 {
+				content.WriteString(emptyState.Render("Нет данных для отображения"))
+			} else {
+				for _, line := range lines {
+					content.WriteString(logLineStyle.Render(strings.TrimSpace(line)))
+					content.WriteString("\n")
+				}
+			}
+		}
 	case tabProtection:
 		content.WriteString(m.protectionView())
 	case tabSettings:

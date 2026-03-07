@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.io.BufferedInputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Optional;
@@ -15,6 +16,7 @@ final class Protocol {
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
   static final byte MSG_UDP = 1;
+  static final byte MSG_LOG = 2;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
   static final int MAGIC_LEN = 5;
@@ -32,23 +34,39 @@ final class Protocol {
     return new HandshakeResult(hs, opts);
   }
 
+  static void writeServerLog(OutputStream out, String msg) throws IOException {
+    if (msg == null) {
+      msg = "";
+    }
+    byte[] payload = msg.getBytes(StandardCharsets.UTF_8);
+    if (payload.length > 65500) {
+      payload = java.util.Arrays.copyOf(payload, 65500);
+    }
+    writeU32(out, payload.length + 1);
+    out.write(MSG_LOG);
+    out.write(payload);
+    out.flush();
+  }
+
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
-    if (!in.markSupported()) return Optional.empty();
-    if (in.available() < 2) return Optional.empty();
-    in.mark(MAX_OPTS + 4);
-    int optsLen = readU16(in);
+    if (!(in instanceof BufferedInputStream bin)) return Optional.empty();
+    int available = bin.available();
+    if (available < 2) return Optional.empty();
+
+    bin.mark(MAX_OPTS + 2);
+    int optsLen = readU16(bin);
     if (optsLen <= 0 || optsLen > MAX_OPTS) {
-      in.reset();
+      bin.reset();
       return Optional.empty();
     }
-    if (in.available() < optsLen) {
-      in.reset();
+    if (bin.available() < optsLen) {
+      bin.reset();
       return Optional.empty();
     }
-    byte[] buf = readN(in, optsLen);
+    byte[] buf = readN(bin, optsLen);
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
     if (parsed.isEmpty()) {
-      in.reset();
+      bin.reset();
       return Optional.empty();
     }
     return parsed;

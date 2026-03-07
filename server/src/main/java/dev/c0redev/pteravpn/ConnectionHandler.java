@@ -5,15 +5,11 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Optional;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 import java.util.logging.Logger;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ConnectionHandler implements Runnable {
 
@@ -22,23 +18,22 @@ final class ConnectionHandler implements Runnable {
     private final Socket sock;
     private final Config cfg;
     private final UdpSessions udp;
-    private final ExecutorService pumpPool;
+    private final TcpRelay tcpRelay;
 
-    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, ExecutorService pumpPool) {
+    ConnectionHandler(Socket sock, Config cfg, UdpSessions udp, TcpRelay tcpRelay) {
         this.sock = sock;
         this.cfg = cfg;
         this.udp = udp;
-        this.pumpPool = pumpPool;
+        this.tcpRelay = tcpRelay;
     }
 
     @Override
     public void run() {
-        try (Socket s = sock) {
+        boolean handoff = false;
+        try {
             var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
-            InputStream in = xor.wrapInput(
-                new BufferedInputStream(s.getInputStream())
-            );
-            OutputStream out = xor.wrapOutput(s.getOutputStream());
+            InputStream in = xor.wrapInput(new BufferedInputStream(sock.getInputStream()));
+            OutputStream out = xor.wrapOutput(sock.getOutputStream());
 
             Protocol.HandshakeResult hr = Protocol.readHandshake(in);
             Protocol.Handshake hs = hr.handshake();
@@ -54,7 +49,7 @@ final class ConnectionHandler implements Runnable {
                 "Accepted role=" +
                     hs.role() +
                     " from " +
-                    s.getRemoteSocketAddress()
+                sock.getRemoteSocketAddress()
             );
 
             if (hs.role() == Protocol.ROLE_UDP) {
@@ -62,13 +57,23 @@ final class ConnectionHandler implements Runnable {
                 return;
             }
             if (hs.role() == Protocol.ROLE_TCP) {
-                handleTcp(in, out);
+                Protocol.TcpConnect tcp = Protocol.readTcpConnect(in);
+                handoff = handleTcp(tcp, xor);
                 return;
             }
             throw new IOException("bad role");
         } catch (EOFException ignored) {
         } catch (IOException e) {
             log.fine("conn closed: " + e.getMessage());
+        } catch (RuntimeException e) {
+            log.fine("conn protocol error: " + e.getMessage());
+        } finally {
+            if (!handoff) {
+                try {
+                    sock.close();
+                } catch (IOException ignored) {
+                }
+            }
         }
     }
 
@@ -90,54 +95,12 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private void handleTcp(InputStream in, OutputStream out)
+    private boolean handleTcp(Protocol.TcpConnect tcp, XorStream xor)
         throws IOException {
-        Protocol.TcpConnect c = Protocol.readTcpConnect(in);
-        log.info("TCP connect to " + c.ip().getHostAddress() + ":" + c.port());
-        try (Socket remote = new Socket()) {
-            remote.setTcpNoDelay(true);
-            remote.setKeepAlive(true);
-            remote.connect(new InetSocketAddress(c.ip(), c.port()), 10_000);
-
-            InputStream rin = remote.getInputStream();
-            OutputStream rout = remote.getOutputStream();
-            OutputStream cout = out;
-            AtomicBoolean closed = new AtomicBoolean(false);
-            Runnable closeBoth = () -> {
-                if (!closed.compareAndSet(false, true)) return;
-                try {
-                    remote.close();
-                } catch (IOException ignored) {}
-                try {
-                    sock.close();
-                } catch (IOException ignored) {}
-            };
-
-            Future<?> f1 = pumpPool.submit(() -> pump(in, rout, closeBoth));
-            Future<?> f2 = pumpPool.submit(() -> pump(rin, cout, closeBoth));
-            try {
-                f1.get();
-            } catch (Exception ignored) {}
-            try {
-                f2.get();
-            } catch (Exception ignored) {}
+        if (sock.getChannel() == null) {
+            throw new IOException("client socket channel unavailable");
         }
-    }
-
-    private static void pump(InputStream in, OutputStream out, Runnable onClose) {
-        byte[] buf = new byte[32 * 1024];
-        try {
-            int r;
-            while ((r = in.read(buf)) != -1) {
-                out.write(buf, 0, r);
-            }
-            out.flush();
-        } catch (IOException ignored) {
-            log.fine("pump closed: " + ignored.getMessage());
-        } finally {
-            if (onClose != null) {
-                onClose.run();
-            }
-        }
+        tcpRelay.register(sock.getChannel(), tcp.ip(), tcp.port(), xor);
+        return true;
     }
 }

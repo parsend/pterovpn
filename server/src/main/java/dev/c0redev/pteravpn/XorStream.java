@@ -23,19 +23,16 @@ final class XorStream {
       public int read() throws IOException {
         int b = in.read();
         if (b == -1) return -1;
-        int k = key[rPos % key.length] & 0xff;
+        int v = (b ^ key[rPos % key.length]) & 0xff;
         rPos++;
-        return (b ^ k) & 0xff;
+        return v;
       }
 
       @Override
       public int read(byte[] b, int off, int len) throws IOException {
         int n = in.read(b, off, len);
         if (n <= 0) return n;
-        for (int i = 0; i < n; i++) {
-          b[off + i] ^= key[rPos % key.length];
-          rPos++;
-        }
+        decode(b, off, n);
         return n;
       }
     };
@@ -51,16 +48,32 @@ final class XorStream {
 
       @Override
       public void write(byte[] b, int off, int len) throws IOException {
-        for (int i = 0; i < len; i++) {
-          b[off + i] ^= key[(wPos + i) % key.length];
-        }
-        wPos += len;
+        int start = wPos;
+        encode(b, off, len);
         out.write(b, off, len);
-        for (int i = 0; i < len; i++) {
-          b[off + i] ^= key[(wPos - len + i) % key.length];
-        }
+        restoreWrite(b, off, len, start);
       }
     };
+  }
+
+  void decode(byte[] b, int off, int len) {
+    for (int i = 0; i < len; i++) {
+      b[off + i] ^= key[rPos % key.length];
+      rPos++;
+    }
+  }
+
+  void encode(byte[] b, int off, int len) {
+    for (int i = 0; i < len; i++) {
+      b[off + i] ^= key[(wPos + i) % key.length];
+    }
+    wPos += len;
+  }
+
+  void restoreWrite(byte[] b, int off, int len, int start) {
+    for (int i = 0; i < len; i++) {
+      b[off + i] ^= key[(start + i) % key.length];
+    }
   }
 
   static byte[] keyFromToken(String token) {

@@ -37,6 +37,11 @@ type Options struct {
 	Protection   *config.ProtectionOptions
 }
 
+const (
+	serverMsgUDP = 1
+	serverMsgLog = 2
+)
+
 func Run(ctx context.Context, opt Options) error {
 	if len(opt.ServerAddrs) == 0 {
 		return errors.New("server addrs empty")
@@ -91,12 +96,33 @@ func Run(ctx context.Context, opt Options) error {
 
 type udpAssocKey struct {
 	SrcPort uint16
-	DstIP   string
+	DstIP   [16]byte
 	DstPort uint16
 }
 
 type udpAssoc struct {
 	c net.PacketConn
+}
+
+func assocIPFromKey(v [16]byte) net.IP {
+	ip := net.IP(v[:])
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	return ip
+}
+
+func assocIPToKey(ip net.IP) [16]byte {
+	var key [16]byte
+	if ip == nil {
+		return key
+	}
+	to16 := ip.To16()
+	if to16 == nil {
+		return key
+	}
+	copy(key[:], to16)
+	return key
 }
 
 type udpMux struct {
@@ -144,20 +170,29 @@ func (m *udpMux) unregister(k udpAssocKey) {
 }
 
 func (m *udpMux) pick(k udpAssocKey) *udpChan {
-	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%d", k.SrcPort, k.DstIP, k.DstPort)))
+	h := sha256.Sum256(
+		[]byte(
+			fmt.Sprintf(
+				"%d|%s|%d",
+				k.SrcPort,
+				assocIPFromKey(k.DstIP).String(),
+				k.DstPort,
+			),
+		),
+	)
 	idx := int(h[0]) % len(m.chans)
 	return m.chans[idx]
 }
 
 func (m *udpMux) send(k udpAssocKey, payload []byte) error {
 	ch := m.pick(k)
-	ip := net.ParseIP(k.DstIP)
+	ip := assocIPFromKey(k.DstIP)
 	f := protocol.UDPFrame{SrcPort: k.SrcPort, DstIP: ip, DstPort: k.DstPort, Payload: payload}
 	return ch.Send(f)
 }
 
 func (m *udpMux) dispatch(f protocol.UDPFrame) {
-	k := udpAssocKey{SrcPort: f.SrcPort, DstIP: f.DstIP.String(), DstPort: f.DstPort}
+	k := udpAssocKey{SrcPort: f.SrcPort, DstIP: assocIPToKey(f.DstIP), DstPort: f.DstPort}
 	m.mu.RLock()
 	a := m.assoc[k]
 	m.mu.RUnlock()
@@ -271,7 +306,14 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 }
 
 func (c *udpChan) Close() error {
-	close(c.stop)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.stop:
+		return nil
+	default:
+		close(c.stop)
+	}
 	return c.conn.Close()
 }
 
@@ -288,12 +330,28 @@ func (c *udpChan) readLoop() {
 			return
 		default:
 		}
-		f, err := protocol.ReadUDPFrame(c.r)
+		kind, payload, err := protocol.ReadServerFrame(c.r)
 		if err != nil {
 			clientlog.Drop("vpn: udp channel read failed: %v", err)
 			return
 		}
-		c.cb(f)
+		switch kind {
+		case serverMsgUDP:
+			f, err := protocol.ParseUDPFramePayload(payload)
+			if err != nil {
+				clientlog.Drop("vpn: udp frame parse failed: %v", err)
+				continue
+			}
+			c.cb(f)
+		case serverMsgLog:
+			msg := strings.TrimSpace(string(payload))
+			if msg == "" {
+				continue
+			}
+			clientlog.Info("%s", "SRV: "+msg)
+		default:
+			clientlog.Warn("vpn: unknown server frame type: %d", kind)
+		}
 	}
 }
 
@@ -316,11 +374,16 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	id := uc.ID()
 	srcPort := uint16(id.RemotePort)
 	dstIP := tcpipToIP(id.LocalAddress)
+	if dstIP == nil {
+		clientlog.Drop("vpn: udp assoc bad destination ip from %s", id.LocalAddress.String())
+		return
+	}
 	dstPort := uint16(id.LocalPort)
 	clientlog.Traffic("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
 
-	k := udpAssocKey{SrcPort: srcPort, DstIP: dstIP.String(), DstPort: dstPort}
-	kAlt := udpAssocKey{SrcPort: dstPort, DstIP: dstIP.String(), DstPort: srcPort}
+	dstKey := assocIPToKey(dstIP)
+	k := udpAssocKey{SrcPort: srcPort, DstIP: dstKey, DstPort: dstPort}
+	kAlt := udpAssocKey{SrcPort: dstPort, DstIP: dstKey, DstPort: srcPort}
 	a := &udpAssoc{c: uc}
 	h.udpMux.register(k, a)
 	if kAlt != k {
@@ -416,13 +479,6 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		clientlog.DPI("vpn: tcp connect frame failed: %v", err)
 		return
 	}
-
-	
-	deadline := time.Now().Add(5 * time.Minute)
-	_ = tc.SetReadDeadline(deadline)
-	_ = tc.SetWriteDeadline(deadline)
-	_ = sconn.SetReadDeadline(deadline)
-	_ = sconn.SetWriteDeadline(deadline)
 
 	copyBufSize := protocol.CopyBufSize(slot)
 	done := make(chan struct{}, 2)
