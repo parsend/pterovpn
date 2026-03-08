@@ -2,12 +2,14 @@ package dev.c0redev.pteravpn;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.StandardSocketOptions;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
@@ -30,37 +32,157 @@ public final class Main {
       }
     }
 
-    int pumpThreads = Math.min(512, Math.max(128, Runtime.getRuntime().availableProcessors() * 32));
-    log.info("Pump pool: " + pumpThreads + " threads");
     ExecutorService pool = Executors.newCachedThreadPool();
-    ExecutorService pumpPool = Executors.newFixedThreadPool(pumpThreads);
     try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {
-      List<ServerSocket> sockets = new ArrayList<>();
+      try (Selector selector = Selector.open()) {
       for (int port : cfg.listenPorts()) {
-        ServerSocket ss = new ServerSocket();
-        ss.setReuseAddress(true);
-        ss.bind(new InetSocketAddress(port));
-        sockets.add(ss);
-        pool.submit(() -> acceptLoop(ss, cfg, udp, pool, pumpPool));
+          ServerSocketChannel ss = ServerSocketChannel.open();
+          ss.configureBlocking(false);
+          ss.setOption(StandardSocketOptions.SO_REUSEADDR, true);
+          ss.bind(new InetSocketAddress(port));
+          ss.register(selector, SelectionKey.OP_ACCEPT);
       }
-
-      Thread.currentThread().join();
+        acceptLoop(selector, cfg, udp, pool);
+      }
     } finally {
       pool.shutdown();
-      pumpPool.shutdown();
     }
   }
 
-  private static void acceptLoop(ServerSocket ss, Config cfg, UdpSessions udp, ExecutorService pool, ExecutorService pumpPool) {
+  private static void acceptLoop(
+    Selector selector,
+    Config cfg,
+    UdpSessions udp,
+    ExecutorService pool
+  ) throws IOException {
     while (true) {
-      try {
-        Socket s = ss.accept();
-        s.setTcpNoDelay(true);
-        s.setKeepAlive(true);
-        pool.submit(new ConnectionHandler(s, cfg, udp, pumpPool));
-      } catch (IOException e) {
-        log.warning("accept error: " + e.getMessage());
+      selector.select();
+      for (SelectionKey key : selector.selectedKeys()) {
+        if (!key.isValid()) {
+          continue;
+        }
+        if (key.isAcceptable()) {
+          accept(selector, key, cfg, udp);
+          continue;
+        }
+        if (key.isReadable()) {
+          readHandshake(key, pool);
+        }
       }
+      selector.selectedKeys().clear();
+    }
+  }
+
+  private static void accept(
+    Selector selector,
+    SelectionKey key,
+    Config cfg,
+    UdpSessions udp
+  ) {
+    ServerSocketChannel ss = (ServerSocketChannel) key.channel();
+    try {
+      SocketChannel ch = ss.accept();
+      if (ch == null) return;
+      ch.setOption(StandardSocketOptions.TCP_NODELAY, true);
+      ch.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+      ch.configureBlocking(false);
+      ch.register(selector, SelectionKey.OP_READ, new PendingConn(ch, cfg, udp));
+    } catch (IOException e) {
+      log.warning("accept error: " + e.getMessage());
+    }
+  }
+
+  private static void readHandshake(SelectionKey key, ExecutorService pool) {
+    PendingConn c = (PendingConn) key.attachment();
+    try {
+      if (c.read()) {
+        key.cancel();
+        c.handoff(pool);
+      }
+    } catch (Exception e) {
+      key.cancel();
+      c.close();
+      log.warning("handshake error: " + e.getMessage());
+    }
+  }
+
+  private static final class PendingConn {
+    private final SocketChannel ch;
+    private final Config cfg;
+    private final UdpSessions udp;
+    private final ProtocolHandshakeParser parser;
+    private ByteBuffer readBuf = ByteBuffer.wrap(BufferPool.borrow(BufferPool.SMALL_CAP));
+    private boolean bufferReturned;
+
+    PendingConn(SocketChannel ch, Config cfg, UdpSessions udp) {
+      this.ch = ch;
+      this.cfg = cfg;
+      this.udp = udp;
+      this.parser = new ProtocolHandshakeParser(XorStream.keyFromToken(cfg.token()));
+    }
+
+    boolean read() throws IOException {
+      int n = ch.read(readBuf);
+      if (n == -1) {
+        throw new IOException("peer closed");
+      }
+      if (n == 0) return false;
+      readBuf.flip();
+      boolean doneNow = parser.consume(readBuf);
+      if (doneNow) {
+        if (parser.result() == null || parser.needsClose()) {
+          throw new IOException("bad handshake");
+        }
+        return true;
+      }
+      if (readBuf.hasRemaining()) {
+        readBuf.compact();
+      } else {
+        readBuf.clear();
+      }
+      return false;
+    }
+
+    void handoff(ExecutorService pool) throws IOException {
+      try {
+        byte[] remainder = new byte[readBuf.remaining()];
+        readBuf.get(remainder);
+        returnBuffer();
+        ch.configureBlocking(true);
+        Protocol.HandshakeResult hr = parser.result();
+        pool.submit(
+          new ConnectionHandler(
+            ch.socket(),
+            cfg,
+            udp,
+            hr,
+            remainder,
+            parser.readPos()
+          )
+        );
+      } catch (Exception e) {
+        returnBuffer();
+        try {
+          ch.close();
+        } catch (Exception ignored) {}
+        throw e;
+      }
+    }
+
+    void close() {
+      returnBuffer();
+      try {
+        ch.close();
+      } catch (IOException ignored) {
+      }
+    }
+
+    private void returnBuffer() {
+      if (bufferReturned) {
+        return;
+      }
+      bufferReturned = true;
+      BufferPool.release(readBuf.array());
     }
   }
 

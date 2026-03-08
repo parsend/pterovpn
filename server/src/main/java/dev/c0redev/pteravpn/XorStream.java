@@ -17,6 +17,12 @@ final class XorStream {
     this.key = key;
   }
 
+  XorStream(byte[] key, int rPos, int wPos) {
+    this.key = key;
+    this.rPos = rPos;
+    this.wPos = wPos;
+  }
+
   InputStream wrapInput(InputStream in) {
     return new FilterInputStream(in) {
       @Override
@@ -61,6 +67,14 @@ final class XorStream {
         }
       }
     };
+  }
+
+  int readPosition() {
+    return rPos;
+  }
+
+  int writePosition() {
+    return wPos;
   }
 
   static byte[] keyFromToken(String token) {

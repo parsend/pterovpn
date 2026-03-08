@@ -3,7 +3,8 @@ package obfuscate
 import (
 	"crypto/sha256"
 	"net"
-	"sync"
+
+	"github.com/parsend/pterovpn/internal/bufpool"
 )
 
 func keyFromToken(token string) []byte {
@@ -24,20 +25,17 @@ func (c *xorConn) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-var writeBufPool = sync.Pool{
-	New: func() any { b := make([]byte, 256*1024); return &b },
-}
-
 func (c *xorConn) Write(p []byte) (n int, err error) {
-	buf := writeBufPool.Get().(*[]byte)
-	defer writeBufPool.Put(buf)
-	if cap(*buf) < len(p) {
-		*buf = make([]byte, len(p)*2)
+	buf := bufpool.Borrow(len(p))
+	if cap(buf) < len(p) {
+		buf = make([]byte, len(p))
 	}
-	b := (*buf)[:len(p)]
+	b := buf[:len(p)]
 	copy(b, p)
 	xorBytes(b, c.key, &c.wPos)
-	return c.Conn.Write(b)
+	n, err = c.Conn.Write(b)
+	bufpool.Return(buf)
+	return n, err
 }
 
 func xorBytes(b, key []byte, pos *int) {

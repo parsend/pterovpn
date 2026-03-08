@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/parsend/pterovpn/internal/clientlog"
+	"github.com/parsend/pterovpn/internal/bufpool"
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
@@ -331,7 +332,8 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 		defer h.udpMux.unregister(kAlt)
 	}
 
-	buf := make([]byte, 64*1024)
+	buf := bufpool.Borrow(64 * 1024)
+	defer bufpool.Return(buf)
 	for {
 		n, _, err := uc.ReadFrom(buf)
 		if err != nil {
@@ -427,12 +429,14 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	copyBufSize := protocol.CopyBufSize(slot)
 	done := make(chan struct{}, 2)
 	go func() {
-		buf := make([]byte, copyBufSize)
+		buf := bufpool.Borrow(copyBufSize)
+		defer bufpool.Return(buf)
 		_, _ = io.CopyBuffer(sconn, tc, buf)
 		done <- struct{}{}
 	}()
 	go func() {
-		buf := make([]byte, copyBufSize)
+		buf := bufpool.Borrow(copyBufSize)
+		defer bufpool.Return(buf)
 		_, _ = io.CopyBuffer(tc, r, buf)
 		done <- struct{}{}
 	}()
