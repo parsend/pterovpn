@@ -217,8 +217,6 @@ func NewModel(opts Opts) Model {
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
 	}
-	m.logViewport.MouseWheelEnabled = true
-	m.logViewport.MouseWheelDelta = 1
 	m.clientSettings, _ = config.LoadClientSettings()
 	m.reloadCfgs()
 	m.reloadCloud(false)

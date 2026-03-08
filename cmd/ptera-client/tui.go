@@ -56,7 +56,7 @@ func runTUI() error {
 		ConnectFn: connectVPN,
 		Version:   version,
 	}
-	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen())
 	go func() {
 		for line := range logCh {
 			p.Send(tui.LogMessage(line))
