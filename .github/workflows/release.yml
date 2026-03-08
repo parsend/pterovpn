@@ -90,7 +90,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ptera-vpn-server.jar
+            dist/server.jar
             dist/ptera-client-linux-amd64
             dist/ptera-client-linux-arm64
             dist/ptera-client-windows-amd64.exe
