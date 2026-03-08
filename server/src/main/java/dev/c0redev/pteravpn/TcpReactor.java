@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
+import java.util.logging.Level;
 
 final class TcpReactorPool {
   private static final Logger log = Log.logger(TcpReactorPool.class);
@@ -111,7 +112,7 @@ final class TcpReactorPool {
           processSelectedKeys();
         } catch (Exception e) {
           if (!closed.get()) {
-            log.warning("reactor loop error: " + e.getMessage());
+            log.log(Level.WARNING, "reactor loop error", e);
           }
         }
       }
@@ -138,14 +139,20 @@ final class TcpReactorPool {
         if (!key.isValid()) continue;
 
         if (!(key.attachment() instanceof Session session)) continue;
-        if (key.isConnectable()) {
-          session.onConnectable();
-        }
-        if (key.isReadable()) {
-          session.onReadable(key);
-        }
-        if (key.isWritable()) {
-          session.onWritable(key);
+        try {
+          int readyOps = key.readyOps();
+          if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
+            session.onConnectable();
+          }
+          if ((readyOps & SelectionKey.OP_READ) != 0) {
+            session.onReadable(key);
+          }
+          if ((readyOps & SelectionKey.OP_WRITE) != 0) {
+            session.onWritable(key);
+          }
+        } catch (Exception e) {
+          log.log(Level.WARNING, "reactor session key error", e);
+          session.close("session key error");
         }
       }
     }
@@ -283,7 +290,7 @@ final class TcpReactorPool {
         connected = true;
         connecting = false;
         if (remoteKey != null && remoteKey.isValid()) {
-          remoteKey.interestOps(SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
+          setInterestOps(remoteKey, SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
         }
         updateClientInterest();
       }
@@ -322,6 +329,7 @@ final class TcpReactorPool {
 
       private void readFromClient() {
         try {
+          if (clientKey == null || !clientKey.isValid()) return;
           SocketChannel client = (SocketChannel) clientKey.channel();
           int n = client.read(buffer.clear());
           if (n == -1) {
@@ -336,15 +344,18 @@ final class TcpReactorPool {
           xor.decode(data, 0, n);
           toRemote.add(ByteBuffer.wrap(data));
           if (connected && remoteKey != null && remoteKey.isValid()) {
-            remoteKey.interestOps(remoteKey.interestOps() | SelectionKey.OP_WRITE);
+            setInterestOps(remoteKey, remoteKey.interestOps() | SelectionKey.OP_WRITE);
           }
         } catch (IOException e) {
           close("client read failed");
+        } catch (RuntimeException e) {
+          close("client read runtime failed");
         }
       }
 
       private void readFromRemote() {
         try {
+          if (remote == null || (remoteKey != null && !remoteKey.isValid())) return;
           int n = remote.read(buffer.clear());
           if (n == -1) {
             close("remote closed");
@@ -358,14 +369,17 @@ final class TcpReactorPool {
           xor.encode(data, 0, n);
           toClient.add(ByteBuffer.wrap(data));
           if (clientKey != null && clientKey.isValid()) {
-            clientKey.interestOps(clientKey.interestOps() | SelectionKey.OP_WRITE);
+            setInterestOps(clientKey, clientKey.interestOps() | SelectionKey.OP_WRITE);
           }
         } catch (IOException e) {
           close("remote read failed");
+        } catch (RuntimeException e) {
+          close("remote read runtime failed");
         }
       }
 
       private void flushToClient() {
+        if (clientKey == null || !clientKey.isValid()) return;
         flush(clientKey, toClient, clientKey.channel());
         updateClientInterest();
       }
@@ -374,7 +388,7 @@ final class TcpReactorPool {
         if (remoteKey == null || !remoteKey.isValid()) return;
         flush(remoteKey, toRemote, remote);
         if (remoteKey != null && remoteKey.isValid()) {
-          remoteKey.interestOps(SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
+          setInterestOps(remoteKey, SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
         }
       }
 
@@ -386,12 +400,12 @@ final class TcpReactorPool {
             ByteBuffer b = q.peek();
             socket.write(b);
             if (b.hasRemaining()) {
-              key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+            setInterestOps(key, key.interestOps() | SelectionKey.OP_WRITE);
               return;
             }
             q.poll();
           }
-          key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+          setInterestOps(key, key.interestOps() & ~SelectionKey.OP_WRITE);
         } catch (IOException e) {
           if (key == clientKey) {
             close("client write failed");
@@ -400,6 +414,17 @@ final class TcpReactorPool {
           }
         } catch (IllegalStateException e) {
           close("session key invalid");
+        } catch (RuntimeException e) {
+          close("session runtime error");
+        }
+      }
+
+      private void setInterestOps(SelectionKey key, int ops) {
+        if (key == null || !key.isValid()) return;
+        try {
+          key.interestOps(ops);
+        } catch (Exception e) {
+          close("interestOps failed");
         }
       }
 
@@ -407,9 +432,7 @@ final class TcpReactorPool {
         if (clientKey == null || !clientKey.isValid()) return;
         int ops = SelectionKey.OP_READ;
         if (!toClient.isEmpty()) ops |= SelectionKey.OP_WRITE;
-        try {
-          clientKey.interestOps(ops);
-        } catch (Exception ignored) {}
+        setInterestOps(clientKey, ops);
       }
 
       void close(String reason) {
