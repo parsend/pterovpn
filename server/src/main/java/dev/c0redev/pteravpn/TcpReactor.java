@@ -213,7 +213,6 @@ final class TcpReactorPool {
           }
         }
       } catch (Exception ignored) {}
-      }
     }
 
     private static void closeChannel(SocketChannel ch) {
@@ -323,7 +322,8 @@ final class TcpReactorPool {
 
       private void readFromClient() {
         try {
-          int n = clientKey.channel().read(buffer.clear());
+          SocketChannel client = (SocketChannel) clientKey.channel();
+          int n = client.read(buffer.clear());
           if (n == -1) {
             close("client closed");
             return;
