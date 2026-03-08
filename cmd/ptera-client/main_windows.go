@@ -75,12 +75,6 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if err := netcfg.AddRoutesViaTun(name, opts.routeCIDRs, 5); err != nil {
 			return err
 		}
-		if opts.serverIP.To4() != nil {
-			netcfg.DelBypass(opts.serverIP)
-			if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
-				clientlog.Warn("bypass re-add after TUN routes: %v", err)
-			}
-		}
 		if onReady != nil {
 			onReady()
 		}

@@ -422,7 +422,8 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 	if len(buf) < off+ipLen+2 {
 		return UDPFrame{}, errors.New("short frame")
 	}
-	dstIP := net.IP(buf[off : off+ipLen])
+	dstIP := make(net.IP, ipLen)
+	copy(dstIP, buf[off:off+ipLen])
 	off += ipLen
 	dstPort := binary.BigEndian.Uint16(buf[off : off+2])
 	off += 2
@@ -431,7 +432,8 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 		return UDPFrame{}, errors.New("bad pad len")
 	}
 	payEnd := len(buf) - 1 - padLen
-	payload := buf[off:payEnd]
+	payload := make([]byte, payEnd-off)
+	copy(payload, buf[off:payEnd])
 	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
 }
 
