@@ -40,7 +40,7 @@ jobs:
 
       - name: collect artifacts
         run: |
-          cp server/target/ptera-vpn-server.jar dist/
+          cp server/target/server.jar dist/
           cp config.properties.example dist/config.properties.example
 
       - uses: actions/upload-artifact@v4
