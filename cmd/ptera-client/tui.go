@@ -22,7 +22,7 @@ import (
 )
 
 type logWriter struct {
-	ch chan<- string
+	ch  chan<- string
 	buf bytes.Buffer
 }
 
@@ -56,7 +56,7 @@ func runTUI() error {
 		ConnectFn: connectVPN,
 		Version:   version,
 	}
-	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen())
+	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	go func() {
 		for line := range logCh {
 			p.Send(tui.LogMessage(line))

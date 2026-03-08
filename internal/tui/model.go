@@ -24,12 +24,12 @@ import (
 )
 
 const (
-	success  = "10"
-	errCol   = "9"
-	dim      = "8"
-	pingGreen = "2"
-	pingYellow = "11"
-	pingRed   = "1"
+	success      = "10"
+	errCol       = "9"
+	dim          = "8"
+	pingGreen    = "2"
+	pingYellow   = "11"
+	pingRed      = "1"
 	probeTimeout = 5 * time.Second
 )
 
@@ -62,8 +62,8 @@ type Opts struct {
 }
 
 type item struct {
-	cfg       config.Config
-	name      string
+	cfg      config.Config
+	name     string
 	pingMs   int64
 	pterovpn int
 }
@@ -142,10 +142,10 @@ type Model struct {
 	protectionTarget    string
 	protectionClientIdx int
 
-	clientSettings   config.ClientSettings
-	settingsEditing  bool
+	clientSettings    config.ClientSettings
+	settingsEditing   bool
 	settingsFormFocus int
-	settingsInputs   []textinput.Model
+	settingsInputs    []textinput.Model
 
 	updateAvailable string
 
@@ -178,7 +178,7 @@ var (
 	logDropStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	logDPIStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
 	logWarnStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	footerStyle = lipgloss.NewStyle().
+	footerStyle     = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(dim))
 	sectionTitle = lipgloss.NewStyle().
 			Bold(true).
@@ -190,14 +190,14 @@ var (
 			Foreground(lipgloss.Color(dim)).
 			Italic(true)
 	hintKey = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("14"))
+		Bold(true).
+		Foreground(lipgloss.Color("14"))
 	hintText = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(dim))
 	kvLabel = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
+		Foreground(lipgloss.Color("7"))
 	kvValue = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("15"))
+		Foreground(lipgloss.Color("15"))
 	cloudDetailStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color(dim)).
 				MarginTop(1)
@@ -217,6 +217,8 @@ func NewModel(opts Opts) Model {
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
 	}
+	m.logViewport.MouseWheelEnabled = true
+	m.logViewport.MouseWheelDelta = 1
 	m.clientSettings, _ = config.LoadClientSettings()
 	m.reloadCfgs()
 	m.reloadCloud(false)
@@ -510,8 +512,8 @@ type errMsg string
 type logMsg string
 
 type pingResultMsg struct {
-	name  string
-	d     time.Duration
+	name   string
+	d      time.Duration
 	failed bool
 }
 type pterovpnResultMsg struct {
@@ -635,6 +637,8 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -1061,6 +1065,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case logMsg:
 		m.logsMu.Lock()
+		if m.tab == tabLogs {
+			m.logAutoScroll = m.logViewport.AtBottom()
+		} else {
+			m.logAutoScroll = true
+		}
 		m.logs = append(m.logs, string(msg))
 		if len(m.logs) > 500 {
 			m.logs = m.logs[len(m.logs)-500:]
@@ -1139,7 +1148,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var cmd tea.Cmd
 	if m.settingsEditing && m.settingsFormFocus < len(m.settingsInputs) {
 		m.settingsInputs[m.settingsFormFocus], cmd = m.settingsInputs[m.settingsFormFocus].Update(msg)
 		return m, cmd
@@ -1156,10 +1164,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.adding && m.addFocus < len(m.addInputs) {
 		m.addInputs[m.addFocus], cmd = m.addInputs[m.addFocus].Update(msg)
 		m.addInputs = fillConnectionFromAnyField(m.addInputs)
-		return m, cmd
-	}
-	if m.tab == tabLogs {
-		m.logViewport, cmd = m.logViewport.Update(msg)
 		return m, cmd
 	}
 	if m.tab == tabProtection {
@@ -1552,9 +1556,6 @@ func (m Model) View() string {
 	}
 	if m.tab == tabCloud && !m.cloudLoading {
 		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  R - обновить"
-	}
-	if m.tab == tabLogs {
-		footer += "  ↑/↓ PgUp/PgDn Home/End - прокрутка"
 	}
 	if m.tab == tabProtection {
 		footer += "  E - редактировать  Ctrl+←/→ - цель  ↑/↓ PgUp/PgDn - прокрутка"
