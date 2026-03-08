@@ -338,9 +338,7 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 			clientlog.Drop("vpn: udp read failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
-		p := make([]byte, n)
-		copy(p, buf[:n])
-		if err := h.udpMux.send(k, p); err != nil {
+		if err := h.udpMux.send(k, buf[:n]); err != nil {
 			clientlog.Drop("vpn: udp send failed %d->%s:%d: %v", srcPort, dstIP.String(), dstPort, err)
 			return
 		}
@@ -353,6 +351,10 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	id := tc.ID()
 	dstIP := tcpipToIP(id.LocalAddress)
 	dstPort := uint16(id.LocalPort)
+
+	if h.isServerAddr(dstIP, dstPort) {
+		return
+	}
 
 	addr := pickAddr(h.opt.ServerAddrs, dstIP, dstPort)
 	clientlog.Traffic("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
@@ -453,6 +455,20 @@ func dialTCP(addr string, token string) (net.Conn, error) {
 		_ = tc.SetNoDelay(true)
 	}
 	return obfuscate.WrapConn(c, token), nil
+}
+
+func (h *handler) isServerAddr(dstIP net.IP, dstPort uint16) bool {
+	for _, a := range h.opt.ServerAddrs {
+		host, port, err := net.SplitHostPort(a)
+		if err != nil || port != strconv.Itoa(int(dstPort)) {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip != nil && ip.Equal(dstIP) {
+			return true
+		}
+	}
+	return false
 }
 
 func pickAddr(addrs []string, ip net.IP, port uint16) string {

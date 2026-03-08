@@ -431,8 +431,7 @@ func ReadUDPFrame(r *bufio.Reader) (UDPFrame, error) {
 		return UDPFrame{}, errors.New("bad pad len")
 	}
 	payEnd := len(buf) - 1 - padLen
-	payload := make([]byte, payEnd-off)
-	copy(payload, buf[off:payEnd])
+	payload := buf[off:payEnd]
 	return UDPFrame{AddrType: at, SrcPort: srcPort, DstIP: dstIP, DstPort: dstPort, Payload: payload}, nil
 }
 
@@ -472,10 +471,12 @@ func WriteUDPFrameWithPad(w *bufio.Writer, f UDPFrame, maxPadVal int) error {
 	if _, err := w.Write(f.Payload); err != nil {
 		return err
 	}
-	pad := make([]byte, padLen)
-	_, _ = rand.Read(pad)
-	if _, err := w.Write(pad); err != nil {
-		return err
+	if padLen > 0 {
+		var pad [64]byte
+		_, _ = rand.Read(pad[:padLen])
+		if _, err := w.Write(pad[:padLen]); err != nil {
+			return err
+		}
 	}
 	if err := w.WriteByte(byte(padLen)); err != nil {
 		return err
