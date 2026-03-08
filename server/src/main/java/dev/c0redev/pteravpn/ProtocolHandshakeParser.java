@@ -148,10 +148,14 @@ final class ProtocolHandshakeParser {
   }
 
   private void consumeOptions(ByteBuffer data) {
+    if (!data.hasRemaining()) {
+      return;
+    }
+    if (looksLikeTcpConnectStart(data)) {
+      finish(null);
+      return;
+    }
     if (data.remaining() < 2) {
-      if (looksLikeTcpConnectStart(data)) {
-        finish(null);
-      }
       return;
     }
     int pos = data.position();
