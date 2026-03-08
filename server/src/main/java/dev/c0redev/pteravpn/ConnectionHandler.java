@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.BufferedInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.SocketTimeoutException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -15,6 +16,7 @@ import java.util.logging.Logger;
 final class ConnectionHandler implements Runnable {
 
     private static final Logger log = Log.logger(ConnectionHandler.class);
+    private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
 
     private final Socket sock;
     private final Config cfg;
@@ -36,7 +38,7 @@ final class ConnectionHandler implements Runnable {
         Socket s = sock;
         try {
             var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
-            s.setSoTimeout(3000);
+            s.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             InputStream in = xor.wrapInput(new BufferedInputStream(s.getInputStream()));
             OutputStream out = xor.wrapOutput(s.getOutputStream());
 
@@ -48,6 +50,7 @@ final class ConnectionHandler implements Runnable {
                     hs.token().getBytes(StandardCharsets.UTF_8)
                 )
             ) {
+                log.warning("bad token from " + s.getRemoteSocketAddress());
                 throw new IOException("bad token");
             }
             log.info(
@@ -74,8 +77,11 @@ final class ConnectionHandler implements Runnable {
                 handedOff = true;
                 return;
             }
+            log.warning("unknown role " + hs.role() + " from " + s.getRemoteSocketAddress());
             throw new IOException("bad role");
         } catch (EOFException ignored) {
+        } catch (SocketTimeoutException e) {
+            log.warning("handshake timeout from " + s.getRemoteSocketAddress() + " after " + HANDSHAKE_TIMEOUT_MS + "ms");
         } catch (IOException e) {
             log.fine("conn closed: " + e.getMessage());
         } finally {
