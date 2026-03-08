@@ -159,7 +159,8 @@ final class ProtocolHandshakeParser {
     int lo = peek(data, pos + 1, 1) & 0xff;
     int optLen = (hi << 8) | lo;
     if (optLen <= 0 || optLen > Protocol.MAX_OPTS) {
-      data.position(pos);
+      data.position(pos + 2);
+      consumeNow(2);
       finish(null);
       return;
     }

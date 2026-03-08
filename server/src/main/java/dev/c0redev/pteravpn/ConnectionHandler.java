@@ -87,7 +87,7 @@ final class ConnectionHandler implements Runnable {
             throw new IOException("bad role");
         } catch (EOFException ignored) {
         } catch (IOException e) {
-            log.fine("conn closed: " + e.getMessage());
+            log.info("conn closed: " + e.getMessage());
         }
     }
 
@@ -121,7 +121,12 @@ final class ConnectionHandler implements Runnable {
             }
             remoteCh.setOption(StandardSocketOptions.TCP_NODELAY, true);
             remoteCh.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
-            remoteCh.connect(new InetSocketAddress(c.ip(), c.port()));
+            try {
+                remoteCh.connect(new InetSocketAddress(c.ip(), c.port()));
+            } catch (IOException e) {
+                log.warning("TCP upstream connect failed " + c.ip().getHostAddress() + ":" + c.port() + " " + e.getMessage());
+                throw e;
+            }
             clientCh.configureBlocking(false);
             remoteCh.configureBlocking(false);
             byte[] key = XorStream.keyFromToken(cfg.token());
