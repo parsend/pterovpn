@@ -358,14 +358,69 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 
 	addr := pickAddr(h.opt.ServerAddrs, dstIP, dstPort)
 	clientlog.Traffic("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
-	sconn, err := dialTCP(addr, h.opt.Token)
-	if err != nil {
-		clientlog.DPI("vpn: tcp dial server failed: %v", err)
-		return
+
+	var sconn net.Conn
+	var r *bufio.Reader
+	slot := protocol.TimeSlot()
+	for try := 0; try < 2; try++ {
+		var err error
+		sconn, r, _, err = h.dialAndHandshakeTCP(addr, dstIP, dstPort, slot)
+		if err == nil {
+			break
+		}
+		if try == 1 {
+			if sconn != nil {
+				_ = sconn.Close()
+			}
+			clientlog.DPI("vpn: tcp connect frame failed: %v", err)
+			return
+		}
+		if sconn != nil {
+			_ = sconn.Close()
+			sconn = nil
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "aborted by the software") && !strings.Contains(msg, "broken pipe") && !strings.Contains(msg, "connection reset") {
+			if sconn != nil {
+				_ = sconn.Close()
+			}
+			clientlog.DPI("vpn: tcp connect frame failed: %v", err)
+			return
+		}
 	}
 	defer sconn.Close()
 
-	slot := protocol.TimeSlot()
+	
+	deadline := time.Now().Add(5 * time.Minute)
+	_ = tc.SetReadDeadline(deadline)
+	_ = tc.SetWriteDeadline(deadline)
+	_ = sconn.SetReadDeadline(deadline)
+	_ = sconn.SetWriteDeadline(deadline)
+
+	copyBufSize := protocol.CopyBufSize(slot)
+	done := make(chan struct{}, 2)
+	go func() {
+		buf := make([]byte, copyBufSize)
+		_, _ = io.CopyBuffer(sconn, tc, buf)
+		done <- struct{}{}
+	}()
+	go func() {
+		buf := make([]byte, copyBufSize)
+		_, _ = io.CopyBuffer(tc, r, buf)
+		done <- struct{}{}
+	}()
+	<-done
+	_ = tc.Close()
+	_ = sconn.Close()
+	<-done
+	clientlog.Traffic("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
+}
+
+func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16, slot int64) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
+	sconn, err := dialTCP(addr, h.opt.Token)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(sconn, bufSize)
 	w := bufio.NewWriterSize(sconn, bufSize)
@@ -400,8 +455,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		junkStyle, flushPolicy = h.opt.Protection.JunkStyle, h.opt.Protection.FlushPolicy
 	}
 	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		clientlog.DPI("vpn: junk write failed: %v", err)
-		return
+		return sconn, nil, nil, err
 	}
 	if !strings.EqualFold(flushPolicy, "perChunk") {
 		_ = w.Flush()
@@ -411,38 +465,12 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		optsJSON, _ = json.Marshal(h.opt.Protection)
 	}
 	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON, slot); err != nil {
-		clientlog.DPI("vpn: tcp handshake failed: %v", err)
-		return
+		return sconn, nil, nil, err
 	}
 	if err := protocol.WriteTcpConnect(w, dstIP, dstPort); err != nil {
-		clientlog.DPI("vpn: tcp connect frame failed: %v", err)
-		return
+		return sconn, nil, nil, err
 	}
-
-	
-	deadline := time.Now().Add(5 * time.Minute)
-	_ = tc.SetReadDeadline(deadline)
-	_ = tc.SetWriteDeadline(deadline)
-	_ = sconn.SetReadDeadline(deadline)
-	_ = sconn.SetWriteDeadline(deadline)
-
-	copyBufSize := protocol.CopyBufSize(slot)
-	done := make(chan struct{}, 2)
-	go func() {
-		buf := make([]byte, copyBufSize)
-		_, _ = io.CopyBuffer(sconn, tc, buf)
-		done <- struct{}{}
-	}()
-	go func() {
-		buf := make([]byte, copyBufSize)
-		_, _ = io.CopyBuffer(tc, r, buf)
-		done <- struct{}{}
-	}()
-	<-done
-	_ = tc.Close()
-	_ = sconn.Close()
-	<-done
-	clientlog.Traffic("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
+	return sconn, r, w, nil
 }
 
 func dialTCP(addr string, token string) (net.Conn, error) {
