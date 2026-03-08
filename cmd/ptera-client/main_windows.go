@@ -3,13 +3,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/netcfg"
@@ -17,6 +20,7 @@ import (
 	"github.com/parsend/pterovpn/internal/sysproxy"
 	"github.com/parsend/pterovpn/internal/tun"
 	"github.com/parsend/pterovpn/internal/vpn"
+	"golang.org/x/text/encoding/charmap"
 )
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
@@ -98,8 +102,18 @@ func configureTunWindows(name, cidr string, _ int) error {
 		return err
 	}
 	args := []string{"interface", "ipv4", "set", "address", "name=" + `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`, "static", ip, mask, "store=active"}
-	_, err = exec.Command("netsh", args...).CombinedOutput()
-	return err
+	out, err := exec.Command("netsh", args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := decodeNetshOutput(out)
+	if isAlreadyExistsNetsh(msg) {
+		return nil
+	}
+	if msg == "" {
+		return err
+	}
+	return fmt.Errorf("netsh: %w: %s", err, msg)
 }
 
 func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
@@ -136,4 +150,34 @@ func parseCIDR(cidr string) (ip, mask string, err error) {
 		mask = "255.255.255.0"
 	}
 	return ip, mask, nil
+}
+
+func decodeNetshOutput(out []byte) string {
+	out = bytes.TrimSpace(out)
+	if len(out) == 0 {
+		return ""
+	}
+	if utf8.Valid(out) {
+		return string(out)
+	}
+	if decoded, err := charmap.CodePage866.NewDecoder().Bytes(out); err == nil {
+		s := strings.TrimSpace(string(decoded))
+		if s != "" {
+			return s
+		}
+	}
+	if decoded, err := charmap.Windows1251.NewDecoder().Bytes(out); err == nil {
+		s := strings.TrimSpace(string(decoded))
+		if s != "" {
+			return s
+		}
+	}
+	return string(out)
+}
+
+func isAlreadyExistsNetsh(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "уже существует") ||
+		strings.Contains(msg, "объект уже существует")
 }

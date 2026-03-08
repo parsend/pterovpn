@@ -4,12 +4,18 @@ package netcfg
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
 	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/charmap"
 )
+
+var errNetshAlreadyExists = errors.New("netsh object already exists")
 
 func GetDefaultRoute() (DefaultRoute, error) {
 	out, err := exec.Command("route", "print", "-4", "0.0.0.0").Output()
@@ -76,9 +82,8 @@ func AddBypass(serverIP net.IP, dr DefaultRoute) error {
 		args = append(args, "nexthop="+dr.Gateway)
 	}
 	args = append(args, "store=active")
-	cmd := exec.Command("netsh", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("netsh: %w: %s", err, bytes.TrimSpace(out))
+	if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
+		return err
 	}
 	return nil
 }
@@ -100,9 +105,8 @@ func AddDefaultViaTun(iface string, metric int) error {
 	}
 	DelDefaultViaTun(iface)
 	args := []string{"interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + strconv.Itoa(metric), "store=active"}
-	cmd := exec.Command("netsh", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("netsh: %w: %s", err, bytes.TrimSpace(out))
+	if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
+		return err
 	}
 	return nil
 }
@@ -125,8 +129,8 @@ func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 			args = append(args, "nexthop="+dr.Gateway)
 		}
 		args = append(args, "store=active")
-		if out, err := exec.Command("netsh", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("exclude %s: %w: %s", n.String(), err, bytes.TrimSpace(out))
+		if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
+			return fmt.Errorf("exclude %s: %w", n.String(), err)
 		}
 	}
 	return nil
@@ -154,9 +158,8 @@ func AddRoutesViaTun(iface string, cidrs []*net.IPNet, metric int) error {
 		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + metricStr, "store=active"}
 		if n.IP.To4() != nil {
 			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+quoteNetshName(iface), "store=active").Run()
-			cmd := exec.Command("netsh", args...)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("route %s: %w: %s", n.String(), err, bytes.TrimSpace(out))
+			if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
+				return fmt.Errorf("route %s: %w", n.String(), err)
 			}
 		}
 	}
@@ -203,4 +206,49 @@ func tunGateway(iface string) string {
 
 func quoteNetshName(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+}
+
+func runNetsh(args ...string) error {
+	out, err := exec.Command("netsh", args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := decodeNetshOutput(out)
+	if isAlreadyExistsNetsh(msg) {
+		return fmt.Errorf("%w: %s", errNetshAlreadyExists, msg)
+	}
+	if msg == "" {
+		return fmt.Errorf("netsh: %w", err)
+	}
+	return fmt.Errorf("netsh: %w: %s", err, msg)
+}
+
+func decodeNetshOutput(out []byte) string {
+	out = bytes.TrimSpace(out)
+	if len(out) == 0 {
+		return ""
+	}
+	if utf8.Valid(out) {
+		return string(out)
+	}
+	if decoded, err := charmap.CodePage866.NewDecoder().Bytes(out); err == nil {
+		s := strings.TrimSpace(string(decoded))
+		if s != "" {
+			return s
+		}
+	}
+	if decoded, err := charmap.Windows1251.NewDecoder().Bytes(out); err == nil {
+		s := strings.TrimSpace(string(decoded))
+		if s != "" {
+			return s
+		}
+	}
+	return string(out)
+}
+
+func isAlreadyExistsNetsh(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "уже существует") ||
+		strings.Contains(msg, "объект уже существует")
 }
