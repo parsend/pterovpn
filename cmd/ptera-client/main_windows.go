@@ -97,7 +97,7 @@ func configureTunWindows(name, cidr string, _ int) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"interface", "ipv4", "set", "address", "name=" + name, "static", ip, mask, "store=active"}
+	args := []string{"interface", "ipv4", "set", "address", "name=" + `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`, "static", ip, mask, "store=active"}
 	_, err = exec.Command("netsh", args...).CombinedOutput()
 	return err
 }

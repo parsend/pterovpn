@@ -34,19 +34,27 @@ func GetDefaultRoute() (DefaultRoute, error) {
 }
 
 func interfaceByIP(needle string) string {
-	out, err := exec.Command("netsh", "interface", "ipv4", "show", "addresses").Output()
+	ip := net.ParseIP(needle)
+	if ip == nil {
+		return ""
+	}
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
-	var cur string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Configuration for interface ") {
-			cur = strings.Trim(strings.TrimPrefix(line, "Configuration for interface "), "\"")
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
 			continue
 		}
-		if cur != "" && strings.Contains(line, needle) && net.ParseIP(needle) != nil {
-			return cur
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP == nil {
+				continue
+			}
+			if ipNet.IP.Equal(ip) {
+				return iface.Name
+			}
 		}
 	}
 	return ""
@@ -89,7 +97,7 @@ func AddDefaultViaTun(iface string, metric int) error {
 	if gateway == "" {
 		gateway = "10.13.37.1"
 	}
-	args := []string{"interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=" + iface, "nexthop=" + gateway, "metric=" + strconv.Itoa(metric), "store=active"}
+	args := []string{"interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + strconv.Itoa(metric), "store=active"}
 	cmd := exec.Command("netsh", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if bytes.Contains(out, []byte("already exists")) {
@@ -101,7 +109,7 @@ func AddDefaultViaTun(iface string, metric int) error {
 }
 
 func DelDefaultViaTun(iface string) {
-	_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix=0.0.0.0/0", "interface="+iface, "store=active").Run()
+	_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix=0.0.0.0/0", "interface="+quoteNetshName(iface), "store=active").Run()
 }
 
 func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
@@ -143,7 +151,7 @@ func AddRoutesViaTun(iface string, cidrs []*net.IPNet, metric int) error {
 		return AddDefaultViaTun(iface, metric)
 	}
 	for _, n := range cidrs {
-		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "interface=" + iface, "nexthop=" + gateway, "metric=" + metricStr, "store=active"}
+		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + metricStr, "store=active"}
 		if n.IP.To4() != nil {
 			cmd := exec.Command("netsh", args...)
 			if out, err := cmd.CombinedOutput(); err != nil && !bytes.Contains(out, []byte("already exists")) {
@@ -161,29 +169,37 @@ func DelRoutesViaTun(iface string, cidrs []*net.IPNet) {
 	}
 	for _, n := range cidrs {
 		if n.IP.To4() != nil {
-			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+iface, "store=active").Run()
+			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+quoteNetshName(iface), "store=active").Run()
 		}
 	}
 }
 
 func tunGateway(iface string) string {
-	out, err := exec.Command("netsh", "interface", "ipv4", "show", "address", "name="+iface).Output()
+	dev, err := net.InterfaceByName(iface)
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "IP Address") {
-			f := strings.Fields(line)
-			for i, s := range f {
-				if s == "Address" && i+1 < len(f) {
-					ip := net.ParseIP(f[i+1])
-					if ip != nil && ip.To4() != nil {
-						ip[3]--
-						return ip.String()
-					}
-				}
-			}
+	addrs, err := dev.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP == nil {
+			continue
 		}
+		ip4 := ipNet.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		gateway := make(net.IP, len(ip4))
+		copy(gateway, ip4)
+		gateway[3]--
+		return gateway.String()
 	}
 	return ""
+}
+
+func quoteNetshName(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
 }
