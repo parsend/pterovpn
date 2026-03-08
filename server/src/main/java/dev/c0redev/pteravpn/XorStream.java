@@ -63,6 +63,24 @@ final class XorStream {
     };
   }
 
+  void decode(byte[] b, int off, int len) {
+    if (len <= 0) return;
+    int limit = off + len;
+    for (int i = off; i < limit; i++) {
+      b[i] ^= key[rPos % key.length];
+      rPos++;
+    }
+  }
+
+  void encode(byte[] b, int off, int len) {
+    if (len <= 0) return;
+    int limit = off + len;
+    for (int i = off; i < limit; i++) {
+      b[i] ^= key[wPos % key.length];
+      wPos++;
+    }
+  }
+
   static byte[] keyFromToken(String token) {
     try {
       MessageDigest md = MessageDigest.getInstance("SHA-256");

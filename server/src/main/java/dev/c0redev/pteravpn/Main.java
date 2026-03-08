@@ -2,12 +2,13 @@ package dev.c0redev.pteravpn;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.net.StandardSocketOptions;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
@@ -30,34 +31,50 @@ public final class Main {
       }
     }
 
-    int pumpThreads = Math.min(512, Math.max(128, Runtime.getRuntime().availableProcessors() * 32));
-    log.info("Pump pool: " + pumpThreads + " threads");
-    ExecutorService pool = Executors.newCachedThreadPool();
-    ExecutorService pumpPool = Executors.newFixedThreadPool(pumpThreads);
+    int reactorThreads = Math.max(1, Runtime.getRuntime().availableProcessors());
+    log.info("TCP reactor pool: " + reactorThreads + " threads");
+    ExecutorService acceptPool = Executors.newCachedThreadPool();
+    ExecutorService handshakePool = Executors.newFixedThreadPool(Math.max(16, reactorThreads * 2));
+    ExecutorService streamPool = Executors.newCachedThreadPool();
+    TcpReactorPool tcpPool = new TcpReactorPool(reactorThreads);
+    List<ServerSocketChannel> sockets = new ArrayList<>();
     try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {
-      List<ServerSocket> sockets = new ArrayList<>();
       for (int port : cfg.listenPorts()) {
-        ServerSocket ss = new ServerSocket();
-        ss.setReuseAddress(true);
+        ServerSocketChannel ss = ServerSocketChannel.open();
+        ss.setOption(StandardSocketOptions.SO_REUSEADDR, true);
         ss.bind(new InetSocketAddress(port));
         sockets.add(ss);
-        pool.submit(() -> acceptLoop(ss, cfg, udp, pool, pumpPool));
+        acceptPool.submit(() -> acceptLoop(ss, cfg, udp, handshakePool, streamPool, tcpPool));
       }
 
       Thread.currentThread().join();
     } finally {
-      pool.shutdown();
-      pumpPool.shutdown();
+      acceptPool.shutdown();
+      handshakePool.shutdown();
+      streamPool.shutdown();
+      tcpPool.shutdown();
+      for (ServerSocketChannel ss : sockets) {
+        try {
+          ss.close();
+        } catch (IOException ignored) {}
+      }
     }
   }
 
-  private static void acceptLoop(ServerSocket ss, Config cfg, UdpSessions udp, ExecutorService pool, ExecutorService pumpPool) {
+  private static void acceptLoop(
+    ServerSocketChannel ss,
+    Config cfg,
+    UdpSessions udp,
+    ExecutorService handshakePool,
+    ExecutorService streamPool,
+    TcpReactorPool tcpPool
+  ) {
     while (true) {
       try {
-        Socket s = ss.accept();
-        s.setTcpNoDelay(true);
-        s.setKeepAlive(true);
-        pool.submit(new ConnectionHandler(s, cfg, udp, pumpPool));
+        SocketChannel s = ss.accept();
+        s.setOption(StandardSocketOptions.TCP_NODELAY, true);
+        s.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+        handshakePool.submit(new ConnectionHandler(s.socket(), cfg, udp, tcpPool, streamPool));
       } catch (IOException e) {
         log.warning("accept error: " + e.getMessage());
       }
