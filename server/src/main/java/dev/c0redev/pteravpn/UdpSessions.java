@@ -47,10 +47,11 @@ final class UdpSessions implements AutoCloseable {
   }
 
   void onFrame(int channelId, Protocol.UdpFrame f) throws IOException {
-    Key k = new Key(f.addrType(), f.srcPort(), f.dst().getAddress(), f.dstPort());
+    Key k = new Key(channelId, f.addrType(), f.srcPort(), f.dst().getAddress(), f.dstPort());
+    UdpChannelWriter writer = channelId >= 0 && channelId < writers.length ? writers[channelId] : null;
     Session s = sessions.get(k);
     if (s == null) {
-      Session created = createSession(channelId, k, f);
+      Session created = createSession(k, f, writer);
       Session raced = sessions.putIfAbsent(k, created);
       if (raced != null) {
         created.close();
@@ -67,14 +68,14 @@ final class UdpSessions implements AutoCloseable {
     }
   }
 
-  private Session createSession(int channelId, Key k, Protocol.UdpFrame f) throws IOException {
+  private Session createSession(Key k, Protocol.UdpFrame f, UdpChannelWriter writer) throws IOException {
     DatagramChannel dc = DatagramChannel.open();
     dc.configureBlocking(false);
     dc.setOption(StandardSocketOptions.SO_RCVBUF, 1 << 20);
     dc.setOption(StandardSocketOptions.SO_SNDBUF, 1 << 20);
     dc.connect(new InetSocketAddress(f.dst(), f.dstPort()));
     SelectionKey sk = dc.register(selector, SelectionKey.OP_READ);
-    Session s = new Session(channelId, k, f.dst(), dc, sk);
+    Session s = new Session(k, f.dst(), dc, sk, writer);
     sk.attach(s);
     selector.wakeup();
     return s;
@@ -102,9 +103,9 @@ final class UdpSessions implements AutoCloseable {
               buf.flip();
               byte[] payload = new byte[buf.remaining()];
               buf.get(payload);
-              UdpChannelWriter w = writers[s.channelId];
-              if (w == null) continue;
-              w.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+              if (s.writer != null) {
+                s.writer.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
+              }
             }
           } catch (IOException e) {
             log.warning("udp read failed for key=" + s.key.srcPort + ":" + s.key.dstPort + " - " + e.getMessage());
@@ -135,18 +136,18 @@ final class UdpSessions implements AutoCloseable {
   }
 
   private static final class Session implements AutoCloseable {
-    final int channelId;
     final Key key;
     final java.net.InetAddress dst;
     final DatagramChannel dc;
     final SelectionKey sk;
+    final UdpChannelWriter writer;
 
-    Session(int channelId, Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk) {
-      this.channelId = channelId;
+    Session(Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk, UdpChannelWriter writer) {
       this.key = key;
       this.dst = dst;
       this.dc = dc;
       this.sk = sk;
+      this.writer = writer;
     }
 
     void send(byte[] payload) throws IOException {
@@ -234,12 +235,14 @@ final class UdpSessions implements AutoCloseable {
   }
 
   private static final class Key {
+    final int channelId;
     final byte addrType;
     final int srcPort;
     final byte[] dstIp;
     final int dstPort;
 
-    Key(byte addrType, int srcPort, byte[] dstIp, int dstPort) {
+    Key(int channelId, byte addrType, int srcPort, byte[] dstIp, int dstPort) {
+      this.channelId = channelId;
       this.addrType = addrType;
       this.srcPort = srcPort;
       this.dstIp = dstIp;
@@ -250,12 +253,13 @@ final class UdpSessions implements AutoCloseable {
     public boolean equals(Object o) {
       if (this == o) return true;
       if (!(o instanceof Key k)) return false;
-      return addrType == k.addrType && srcPort == k.srcPort && dstPort == k.dstPort && Arrays.equals(dstIp, k.dstIp);
+      return channelId == k.channelId && addrType == k.addrType && srcPort == k.srcPort
+          && dstPort == k.dstPort && Arrays.equals(dstIp, k.dstIp);
     }
 
     @Override
     public int hashCode() {
-      int r = Objects.hash(addrType, srcPort, dstPort);
+      int r = Objects.hash(channelId, addrType, srcPort, dstPort);
       r = 31 * r + Arrays.hashCode(dstIp);
       return r;
     }
