@@ -24,11 +24,25 @@ public final class Main {
     log = Log.logger(Main.class);
     log.info("Base: " + base);
     log.info("Ports: " + cfg.listenPorts());
+    if (cfg.updateEnabled()) {
+      Path jp = jarPath();
+      if (jp != null) {
+        Thread t = new Thread(new UpdateRunner(jp, cfg), "update-runner");
+        t.setDaemon(true);
+        t.start();
+      }
+    }
     String host = cfg.publicHost();
     if (host != null && !host.isBlank()) {
       for (int port : cfg.listenPorts()) {
         log.info("Connection: " + host + ":" + port + ":" + cfg.token());
       }
+    }
+
+    if (cfg.updateEnabled()) {
+      Thread updateThread = new Thread(new UpdateRunner(jarPath(), cfg), "update-runner");
+      updateThread.setDaemon(true);
+      updateThread.start();
     }
 
     int reactorThreads = Math.max(1, Runtime.getRuntime().availableProcessors());
@@ -90,6 +104,15 @@ public final class Main {
     } catch (Exception ignored) {
     }
     return Paths.get("").toAbsolutePath().normalize();
+  }
+
+  static Path jarPath() {
+    try {
+      String p = Main.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
+      return Paths.get(p).toAbsolutePath().normalize();
+    } catch (Exception e) {
+      return null;
+    }
   }
 }
 

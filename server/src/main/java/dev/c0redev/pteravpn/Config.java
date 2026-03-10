@@ -14,14 +14,28 @@ final class Config {
   private final int udpChannels;
   private final String publicHost;
   private final boolean debug;
+  private final boolean updateEnabled;
+  private final String updateRepo;
+  private final int updateCheckIntervalMinutes;
+  private final int updateRestartExitCode;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug) {
+  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug,
+                 boolean updateEnabled, String updateRepo, int updateCheckIntervalMinutes, int updateRestartExitCode) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
     this.publicHost = publicHost != null ? publicHost : "";
     this.debug = debug;
+    this.updateEnabled = updateEnabled;
+    this.updateRepo = updateRepo != null ? updateRepo.trim() : "";
+    this.updateCheckIntervalMinutes = updateCheckIntervalMinutes;
+    this.updateRestartExitCode = updateRestartExitCode;
   }
+
+  boolean updateEnabled() { return updateEnabled; }
+  String updateRepo() { return updateRepo; }
+  int updateCheckIntervalMinutes() { return updateCheckIntervalMinutes; }
+  int updateRestartExitCode() { return updateRestartExitCode; }
 
   boolean debug() {
     return debug;
@@ -63,7 +77,12 @@ final class Config {
 
     String publicHost = firstNonEmpty(p.getProperty("publicHost"), "");
     boolean debug = "true".equalsIgnoreCase(p.getProperty("debug", "").trim());
-    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug);
+    boolean updateEnabled = "true".equalsIgnoreCase(p.getProperty("update.enabled", "false").trim());
+    String updateRepo = firstNonEmpty(p.getProperty("update.repo"), "parsend/pterovpn");
+    int updateCheckIntervalMinutes = Math.max(15, parseInt(p.getProperty("update.checkIntervalMinutes"), 60));
+    int updateRestartExitCode = parseInt(p.getProperty("update.restartExitCode"), 0);
+    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug,
+        updateEnabled, updateRepo, updateCheckIntervalMinutes, updateRestartExitCode);
   }
 
   private static String firstNonEmpty(String a, String b) {
