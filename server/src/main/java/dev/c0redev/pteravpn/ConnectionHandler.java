@@ -95,6 +95,7 @@ final class ConnectionHandler implements Runnable {
 
     private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)
         throws IOException {
+        UdpSessions.UdpChannelWriter writer = udp.createWriter(out, opts.orElse(null));
         try {
             if (
                 channelId < 0 || channelId >= cfg.udpChannels()
@@ -105,12 +106,12 @@ final class ConnectionHandler implements Runnable {
                     " registered from " +
                     sock.getRemoteSocketAddress()
             );
-            udp.setWriter(channelId, out, opts);
             while (true) {
                 Protocol.UdpFrame f = Protocol.readUdpFrame(in);
-                udp.onFrame(channelId, f);
+                udp.onFrame(writer, channelId, f);
             }
         } finally {
+            udp.removeWriter(writer);
             try {
                 sock.close();
             } catch (IOException ignored) {

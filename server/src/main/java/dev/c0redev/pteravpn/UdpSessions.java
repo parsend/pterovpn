@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.StandardSocketOptions;
-import java.util.Optional;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
@@ -16,39 +15,45 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 final class UdpSessions implements AutoCloseable {
   private final Logger log = Log.logger(UdpSessions.class);
   private final Map<Key, Session> sessions = new ConcurrentHashMap<>();
-  private final UdpChannelWriter[] writers;
   private final Selector selector;
   private final Thread selectorThread;
   private final AtomicBoolean closed = new AtomicBoolean(false);
+  private final AtomicInteger writerSeq = new AtomicInteger(1);
   private static final int UDP_BUFFER_SIZE = 64 * 1024;
   private static final int WRITE_RETRY_DELAY_MS = 2;
   private static final int WRITE_TIMEOUT_MS = 2_000;
+  private static final long SESSION_IDLE_TIMEOUT_NANOS = TimeUnit.MINUTES.toNanos(5);
 
   UdpSessions(int channels) throws IOException {
-    this.writers = new UdpChannelWriter[channels];
     this.selector = Selector.open();
     this.selectorThread = new Thread(this::selectLoop, "udp-selector");
     this.selectorThread.setDaemon(true);
     this.selectorThread.start();
   }
 
-  void setWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
-    if (channelId < 0 || channelId >= writers.length) throw new IllegalArgumentException("bad channel");
-    UdpChannelWriter prev = writers[channelId];
-    if (prev != null) {
-      prev.close();
-    }
-    writers[channelId] = new UdpChannelWriter(channelId, out, opts);
+  UdpChannelWriter createWriter(OutputStream out, Protocol.ClientOptions opts) {
+    int id = writerSeq.getAndIncrement();
+    return new UdpChannelWriter(id, out, opts);
   }
 
-  void onFrame(int channelId, Protocol.UdpFrame f) throws IOException {
-    Key k = new Key(channelId, f.addrType(), f.srcPort(), f.dst().getAddress(), f.dstPort());
-    UdpChannelWriter writer = channelId >= 0 && channelId < writers.length ? writers[channelId] : null;
+  void removeWriter(UdpChannelWriter writer) {
+    if (writer == null) return;
+    writer.close();
+    for (Session s : sessions.values()) {
+      if (s.writer == writer) {
+        closeSession(s.key, s);
+      }
+    }
+  }
+
+  void onFrame(UdpChannelWriter writer, int channelId, Protocol.UdpFrame f) throws IOException {
+    Key k = new Key(writer.id, f.addrType(), f.srcPort(), f.dst().getAddress(), f.dstPort());
     Session s = sessions.get(k);
     if (s == null) {
       Session created = createSession(k, f, writer);
@@ -83,6 +88,7 @@ final class UdpSessions implements AutoCloseable {
 
   private void selectLoop() {
     ByteBuffer buf = ByteBuffer.allocateDirect(UDP_BUFFER_SIZE);
+    long lastCleanup = System.nanoTime();
     while (!closed.get()) {
       try {
         int n = selector.select(1000);
@@ -103,6 +109,7 @@ final class UdpSessions implements AutoCloseable {
               buf.flip();
               byte[] payload = new byte[buf.remaining()];
               buf.get(payload);
+              s.touch();
               if (s.writer != null) {
                 s.writer.send(new Protocol.UdpFrame(s.key.addrType, s.key.srcPort, s.dst, s.key.dstPort, payload));
               }
@@ -113,8 +120,22 @@ final class UdpSessions implements AutoCloseable {
           }
         }
         selector.selectedKeys().clear();
+        long now = System.nanoTime();
+        if (now - lastCleanup >= TimeUnit.SECONDS.toNanos(10)) {
+          cleanupIdleSessions(now);
+          lastCleanup = now;
+        }
       } catch (IOException e) {
         log.warning("udp selector error: " + e.getMessage());
+      }
+    }
+  }
+
+  private void cleanupIdleSessions(long nowNanos) {
+    for (Session s : sessions.values()) {
+      long idleNanos = nowNanos - s.lastActivityNanos();
+      if (idleNanos >= SESSION_IDLE_TIMEOUT_NANOS) {
+        closeSession(s.key, s);
       }
     }
   }
@@ -126,11 +147,6 @@ final class UdpSessions implements AutoCloseable {
       try { s.close(); } catch (IOException ignored) {}
     }
     sessions.clear();
-    for (UdpChannelWriter w : writers) {
-      if (w == null) continue;
-      w.close();
-    }
-    Arrays.fill(writers, null);
     try { selector.wakeup(); } catch (Exception ignored) {}
     try { selector.close(); } catch (Exception ignored) {}
   }
@@ -141,6 +157,7 @@ final class UdpSessions implements AutoCloseable {
     final DatagramChannel dc;
     final SelectionKey sk;
     final UdpChannelWriter writer;
+    private volatile long lastActivityNanos;
 
     Session(Key key, java.net.InetAddress dst, DatagramChannel dc, SelectionKey sk, UdpChannelWriter writer) {
       this.key = key;
@@ -148,11 +165,13 @@ final class UdpSessions implements AutoCloseable {
       this.dc = dc;
       this.sk = sk;
       this.writer = writer;
+      this.lastActivityNanos = System.nanoTime();
     }
 
     void send(byte[] payload) throws IOException {
       ByteBuffer bb = ByteBuffer.wrap(payload);
       synchronized (this) {
+        touch();
         long timeoutAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WRITE_TIMEOUT_MS);
         while (bb.hasRemaining()) {
           int w = dc.write(bb);
@@ -168,6 +187,14 @@ final class UdpSessions implements AutoCloseable {
       }
     }
 
+    void touch() {
+      this.lastActivityNanos = System.nanoTime();
+    }
+
+    long lastActivityNanos() {
+      return lastActivityNanos;
+    }
+
     @Override
     public void close() throws IOException {
       try { sk.cancel(); } catch (Exception ignored) {}
@@ -175,19 +202,19 @@ final class UdpSessions implements AutoCloseable {
     }
   }
 
-  private static final class UdpChannelWriter implements AutoCloseable {
-    private final int channelId;
+  public static final class UdpChannelWriter implements AutoCloseable {
+    final int id;
     private final OutputStream out;
-    private final Optional<Protocol.ClientOptions> opts;
+    private final Protocol.ClientOptions opts;
     private final LinkedBlockingQueue<Protocol.UdpFrame> q = new LinkedBlockingQueue<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Thread t;
 
-    UdpChannelWriter(int channelId, OutputStream out, Optional<Protocol.ClientOptions> opts) {
-      this.channelId = channelId;
+    UdpChannelWriter(int id, OutputStream out, Protocol.ClientOptions opts) {
+      this.id = id;
       this.out = out;
-      this.opts = opts != null ? opts : Optional.empty();
-      this.t = new Thread(this::loop, "udp-writer-" + channelId);
+      this.opts = opts;
+      this.t = new Thread(this::loop, "udp-writer-" + id);
       this.t.setDaemon(true);
       this.t.start();
     }
@@ -203,7 +230,8 @@ final class UdpSessions implements AutoCloseable {
           Protocol.UdpFrame f = q.poll(1, TimeUnit.SECONDS);
           if (f == null) continue;
           synchronized (out) {
-            int maxPad = opts.map(o -> o.padS4()).filter(p -> p > 0 && p <= 64).orElse(Protocol.MAX_PAD);
+            int pad = opts != null ? opts.padS4() : 0;
+            int maxPad = pad > 0 && pad <= 64 ? pad : Protocol.MAX_PAD;
             Protocol.writeUdpFrame(out, f, maxPad);
             out.flush();
           }
@@ -235,14 +263,14 @@ final class UdpSessions implements AutoCloseable {
   }
 
   private static final class Key {
-    final int channelId;
+    final int writerId;
     final byte addrType;
     final int srcPort;
     final byte[] dstIp;
     final int dstPort;
 
-    Key(int channelId, byte addrType, int srcPort, byte[] dstIp, int dstPort) {
-      this.channelId = channelId;
+    Key(int writerId, byte addrType, int srcPort, byte[] dstIp, int dstPort) {
+      this.writerId = writerId;
       this.addrType = addrType;
       this.srcPort = srcPort;
       this.dstIp = dstIp;
@@ -253,13 +281,13 @@ final class UdpSessions implements AutoCloseable {
     public boolean equals(Object o) {
       if (this == o) return true;
       if (!(o instanceof Key k)) return false;
-      return channelId == k.channelId && addrType == k.addrType && srcPort == k.srcPort
+      return writerId == k.writerId && addrType == k.addrType && srcPort == k.srcPort
           && dstPort == k.dstPort && Arrays.equals(dstIp, k.dstIp);
     }
 
     @Override
     public int hashCode() {
-      int r = Objects.hash(channelId, addrType, srcPort, dstPort);
+      int r = Objects.hash(writerId, addrType, srcPort, dstPort);
       r = 31 * r + Arrays.hashCode(dstIp);
       return r;
     }
