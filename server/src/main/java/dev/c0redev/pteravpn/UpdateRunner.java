@@ -21,14 +21,18 @@ final class UpdateRunner implements Runnable {
   private static final byte[] ZIP_MAGIC = {0x50, 0x4b, 0x03, 0x04};
 
   private final Path jarPath;
+  private final Path versionFile;
   private final Config cfg;
-  private final String currentVersion;
+  private final String manifestVersion;
+  private String storedVersion;
   private final Logger log;
 
   UpdateRunner(Path jarPath, Config cfg) {
     this.jarPath = jarPath;
     this.cfg = cfg;
-    this.currentVersion = versionFromManifest();
+    this.versionFile = jarPath.getParent().resolve("server.version");
+    this.manifestVersion = versionFromManifest();
+    this.storedVersion = readStoredVersion();
     this.log = Log.logger(UpdateRunner.class);
   }
 
@@ -38,7 +42,7 @@ final class UpdateRunner implements Runnable {
       log.info("Update check disabled: not running from a JAR file");
       return;
     }
-    if (currentVersion == null || currentVersion.isEmpty()) {
+    if ((manifestVersion == null || manifestVersion.isEmpty()) && (storedVersion == null || storedVersion.isEmpty())) {
       log.warning("Update check disabled: no Implementation-Version in manifest");
       return;
     }
@@ -47,7 +51,8 @@ final class UpdateRunner implements Runnable {
       return;
     }
     long intervalMs = cfg.updateCheckIntervalMinutes() * 60L * 1000;
-    log.info("Update runner started, current version " + currentVersion + ", check every " + cfg.updateCheckIntervalMinutes() + " min");
+    String current = effectiveCurrentVersion();
+    log.info("Update runner started, current version " + current + ", check every " + cfg.updateCheckIntervalMinutes() + " min");
     try {
       checkAndApply();
     } catch (Exception e) {
@@ -95,7 +100,7 @@ final class UpdateRunner implements Runnable {
       return;
     }
     String normalizedLatest = normalizeVersion(latestTag);
-    String normalizedCurrent = normalizeVersion(currentVersion);
+    String normalizedCurrent = normalizeVersion(effectiveCurrentVersion());
     if (compareVersions(normalizedLatest, normalizedCurrent) <= 0) {
       return;
     }
@@ -114,6 +119,8 @@ final class UpdateRunner implements Runnable {
       Files.move(jarPath, backup, StandardCopyOption.REPLACE_EXISTING);
     }
     Files.move(tmp, jarPath, StandardCopyOption.REPLACE_EXISTING);
+    storedVersion = normalizedLatest;
+    writeStoredVersion(normalizedLatest);
     log.info("Updated to " + latestTag + ", restarting (exit " + cfg.updateRestartExitCode() + ")");
     System.exit(cfg.updateRestartExitCode());
   }
@@ -126,6 +133,33 @@ final class UpdateRunner implements Runnable {
   private static String versionFromManifest() {
     String v = Main.class.getPackage().getImplementationVersion();
     return v != null ? v.trim() : "";
+  }
+
+  private String effectiveCurrentVersion() {
+    if (storedVersion != null && !storedVersion.isEmpty()) {
+      return storedVersion;
+    }
+    return manifestVersion != null ? manifestVersion : "";
+  }
+
+  private String readStoredVersion() {
+    try {
+      if (!Files.isRegularFile(versionFile)) {
+        return "";
+      }
+      String v = Files.readString(versionFile).trim();
+      return v;
+    } catch (IOException e) {
+      return "";
+    }
+  }
+
+  private void writeStoredVersion(String v) {
+    try {
+      Files.writeString(versionFile, v);
+    } catch (IOException e) {
+      log.warning("Failed to write version file: " + e.getMessage());
+    }
   }
 
   private static String normalizeVersion(String tag) {
