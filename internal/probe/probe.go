@@ -33,7 +33,7 @@ func Ping(addr string, timeout time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
+func ProbePterovpn(addr string, timeout time.Duration) (ok bool, ipv6 bool, err error) {
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout
 	}
@@ -41,12 +41,11 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 
 	c, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer c.Close()
 
 	wrapped := obfuscate.WrapConn(c, badToken)
-	r := bufio.NewReader(wrapped)
 	w := bufio.NewWriter(wrapped)
 
 	slot := protocol.TimeSlot()
@@ -55,10 +54,10 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() })
 	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, badToken); err != nil {
 		log.Printf("probe: handshake write: %v", err)
-		return false, err
+		return false, false, err
 	}
 	if err := w.Flush(); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if tcp, ok := c.(*net.TCPConn); ok {
 		_ = tcp.CloseWrite()
@@ -66,20 +65,23 @@ func ProbePterovpn(addr string, timeout time.Duration) (bool, error) {
 
 	_ = c.SetReadDeadline(time.Now().Add(timeout))
 	buf := make([]byte, 1)
-	_, err = r.Read(buf)
+	n, err := c.Read(buf)
+	if n == 1 {
+		return true, buf[0] == 1, nil
+	}
 	if err == io.EOF {
-		return true, nil
+		return true, false, nil
 	}
 	if err != nil {
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return false, nil
+			return false, false, nil
 		}
 		if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-			return true, nil
+			return true, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
-	return false, nil
+	return false, false, nil
 }
 
 func DNSOK(addrs []string, timeout time.Duration) bool {
@@ -121,3 +123,4 @@ func InternetOK(timeout time.Duration) bool {
 	}
 	return false
 }
+

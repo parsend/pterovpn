@@ -62,13 +62,19 @@ type Opts struct {
 }
 
 type item struct {
-	cfg      config.Config
-	name     string
-	pingMs   int64
-	pterovpn int
+	cfg         config.Config
+	name        string
+	pingMs      int64
+	pterovpn    int
+	ipv6Support bool
 }
 
-func (i item) Title() string { return i.name }
+func (i item) Title() string {
+	if i.ipv6Support {
+		return i.name + "  · IPv6"
+	}
+	return i.name
+}
 func (i item) Description() string {
 	var ping, ptr string
 	switch {
@@ -97,7 +103,11 @@ func (i item) Description() string {
 	default:
 		ptr = lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("○")
 	}
-	return fmt.Sprintf("[%s] [%s] %s", ping, ptr, i.cfg.Server)
+	ipv6 := ""
+	if i.ipv6Support {
+		ipv6 = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("IPv6")
+	}
+	return fmt.Sprintf("[%s] [%s]%s %s", ping, ptr, ipv6, i.cfg.Server)
 }
 func (i item) FilterValue() string { return i.name + " " + i.cfg.Server }
 
@@ -114,6 +124,7 @@ type Model struct {
 	pingResults   map[string]time.Duration
 	pingFailed    map[string]bool
 	pterovpnRes   map[string]int
+	cfgIPv6       map[string]bool
 	logBuf        *bytes.Buffer
 	logs          []string
 	logsMu        sync.Mutex
@@ -132,6 +143,7 @@ type Model struct {
 	cloudCfgs     []config.Config
 	cloudNames    []string
 	cloudGeo      map[string]geo.Info
+	cloudIPv6     map[string]bool
 	cloudLoading  bool
 	cloudFetchErr string
 
@@ -213,6 +225,7 @@ func NewModel(opts Opts) Model {
 		pingResults:        make(map[string]time.Duration),
 		pingFailed:         make(map[string]bool),
 		pterovpnRes:        make(map[string]int),
+		cfgIPv6:            make(map[string]bool),
 		logViewport:        viewport.New(60, 14),
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
@@ -222,6 +235,7 @@ func NewModel(opts Opts) Model {
 	m.reloadCloud(false)
 	m.cloudLoading = true
 	m.cloudFetchErr = ""
+	m.cloudIPv6 = make(map[string]bool)
 	return m
 }
 
@@ -238,7 +252,8 @@ func (m *Model) buildItems() []list.Item {
 		if v, exists := m.pterovpnRes[m.names[i]]; exists {
 			pterovpn = v
 		}
-		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn}
+		ipv6 := m.cfgIPv6 != nil && m.cfgIPv6[m.names[i]]
+		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6}
 	}
 	return items
 }
@@ -303,7 +318,8 @@ func (m *Model) buildCloudItems() []list.Item {
 				name = formatGeoName(g, m.cloudNames[i])
 			}
 		}
-		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn}
+		ipv6Support := m.cloudIPv6 != nil && m.cloudIPv6[m.cloudNames[i]]
+		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6Support}
 	}
 	return items
 }
@@ -519,6 +535,7 @@ type pterovpnResultMsg struct {
 	name string
 	ok   bool
 	err  bool
+	ipv6 bool
 }
 
 type cloudFetchedMsg struct {
@@ -593,11 +610,11 @@ func runPing(addr, name string) tea.Cmd {
 
 func runProbePterovpn(addr, name string) tea.Cmd {
 	return func() tea.Msg {
-		ok, err := probe.ProbePterovpn(addr, probeTimeout)
+		ok, ipv6, err := probe.ProbePterovpn(addr, probeTimeout)
 		if err != nil {
-			return pterovpnResultMsg{name: name, ok: false, err: true}
+			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false}
 		}
-		return pterovpnResultMsg{name: name, ok: ok, err: false}
+		return pterovpnResultMsg{name: name, ok: ok, err: false, ipv6: ipv6}
 	}
 }
 
@@ -745,6 +762,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settingsFormFocus = 0
 				m.settingsInputs = newSettingsInputs(m.clientSettings)
 				m.settingsInputs[0].Focus()
+				return m, nil
+			}
+			if m.tab == tabCloud && !m.cloudLoading && !m.editing && len(m.cloudCfgs) > 0 {
+				idx := m.cloudList.Index()
+				if idx >= 0 && idx < len(m.cloudCfgs) {
+					m.editing = true
+					m.editingName = m.cloudNames[idx]
+					cfg := m.cloudCfgs[idx]
+					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
+					m.editFocus = 0
+					m.editInputs[0].Focus()
+					m.err = ""
+				}
 				return m, nil
 			}
 			if m.tab == tabProtection && !m.protectionEditing {
@@ -1054,6 +1084,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.activeCfg = m.cloudNames[idx]
 						m.connectCount++
 						cfg := m.cloudCfgs[idx]
+						if saved, err := config.LoadByName(m.cloudNames[idx]); err == nil &&
+							saved.Server == cfg.Server && saved.Token == cfg.Token {
+							cfg = saved
+						}
 						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
 					}
 				}
@@ -1124,6 +1158,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.pterovpnRes[msg.name] = 0
 		}
+		if m.cfgIPv6 == nil {
+			m.cfgIPv6 = make(map[string]bool)
+		}
+		m.cfgIPv6[msg.name] = msg.ipv6
+		if m.cloudIPv6 == nil {
+			m.cloudIPv6 = make(map[string]bool)
+		}
+		m.cloudIPv6[msg.name] = msg.ipv6
 		m.refreshCfgItems()
 		m.refreshCloudItems()
 		return m, nil
@@ -1142,6 +1184,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cloudGeo == nil {
 			m.cloudGeo = make(map[string]geo.Info)
 		}
+		m.cloudIPv6 = make(map[string]bool)
 		items := m.buildCloudItems()
 		l := list.New(items, list.NewDefaultDelegate(), 40, 14)
 		l.Title = "Cloud конфиги"
@@ -1440,9 +1483,39 @@ func (m Model) View() string {
 			}
 		} else {
 			content.WriteString(m.cfgList.View())
+			idx := m.cfgList.Index()
+			if idx >= 0 && idx < len(m.cfgs) {
+				name := m.names[idx]
+				ipv6Ok := m.cfgIPv6 != nil && m.cfgIPv6[name]
+				_, probed := m.pterovpnRes[name]
+				var ipv6Str string
+				if probed {
+					if ipv6Ok {
+						ipv6Str = "IPv6: ✓"
+					} else {
+						ipv6Str = "IPv6: ✗"
+					}
+				} else {
+					ipv6Str = "IPv6: —"
+				}
+				content.WriteString(cloudDetailStyle.Render(ipv6Str))
+			}
 		}
 	case tabCloud:
-		if m.cloudLoading {
+		if m.editing {
+			content.WriteString("Редактирование (cloud): " + m.editingName + "\n\n")
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
+			for i := range m.editInputs {
+				content.WriteString(labels[i] + " ")
+				content.WriteString(m.editInputs[i].View())
+				content.WriteString("\n")
+			}
+			content.WriteString("\nTab/Enter - следующее  Esc - отмена")
+			if m.err != "" {
+				content.WriteString("\n")
+				content.WriteString(errStyle.Render(m.err))
+			}
+		} else if m.cloudLoading {
 			content.WriteString("Загрузка cloud конфигов...")
 		} else if m.cloudFetchErr != "" {
 			content.WriteString(errStyle.Render("Ошибка: " + m.cloudFetchErr))
@@ -1452,21 +1525,40 @@ func (m Model) View() string {
 		} else {
 			content.WriteString(m.cloudList.View())
 			idx := m.cloudList.Index()
-			if idx >= 0 && idx < len(m.cloudCfgs) && m.cloudGeo != nil {
-				if g, ok := m.cloudGeo[cloudHost(m.cloudCfgs[idx].Server)]; ok {
-					parts := []string{}
-					if g.CountryCode != "" {
-						parts = append(parts, g.CountryCode)
+			if idx >= 0 && idx < len(m.cloudCfgs) {
+				parts := []string{}
+				if m.cloudGeo != nil {
+					if g, ok := m.cloudGeo[cloudHost(m.cloudCfgs[idx].Server)]; ok {
+						if g.CountryCode != "" {
+							parts = append(parts, g.CountryCode)
+						}
+						if g.ASN != "" {
+							parts = append(parts, g.ASN)
+						}
+						if g.Org != "" {
+							parts = append(parts, g.Org)
+						}
 					}
-					if g.ASN != "" {
-						parts = append(parts, g.ASN)
+				}
+				ipv6Ok, hasProbe := false, false
+				if m.cloudIPv6 != nil {
+					ipv6Ok = m.cloudIPv6[m.cloudNames[idx]]
+					hasProbe = true
+				}
+				if _, probed := m.pterovpnRes[m.cloudNames[idx]]; probed {
+					hasProbe = true
+				}
+				if hasProbe {
+					if ipv6Ok {
+						parts = append(parts, "IPv6: ✓")
+					} else {
+						parts = append(parts, "IPv6: ✗")
 					}
-					if g.Org != "" {
-						parts = append(parts, g.Org)
-					}
-					if len(parts) > 0 {
-						content.WriteString(cloudDetailStyle.Render(strings.Join(parts, " · ")))
-					}
+				} else {
+					parts = append(parts, "IPv6: —")
+				}
+				if len(parts) > 0 {
+					content.WriteString(cloudDetailStyle.Render(strings.Join(parts, " · ")))
 				}
 			}
 		}
@@ -1566,7 +1658,7 @@ func (m Model) View() string {
 		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  D - удалить"
 	}
 	if m.tab == tabCloud && !m.cloudLoading {
-		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  R - обновить"
+		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  E - ред. (IPv6)  R - обновить"
 	}
 	if m.tab == tabProtection {
 		footer += "  E - редактировать  Ctrl+←/→ - цель  ↑/↓ PgUp/PgDn - прокрутка"

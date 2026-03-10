@@ -90,13 +90,30 @@ func parseCloudLines(s string) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		server, token, ok := ParseConnection(line)
+		parts := strings.Fields(line)
+		if len(parts) < 1 {
+			continue
+		}
+		server, token, ok := ParseConnection(parts[0])
 		if !ok || server == "" || token == "" {
 			continue
 		}
 		out = append(out, line)
 	}
 	return out
+}
+
+func parseCloudLine(line string) (conn string, tunCIDR6 string) {
+	line = strings.TrimSpace(line)
+	parts := strings.Fields(line)
+	if len(parts) < 1 {
+		return "", ""
+	}
+	conn = parts[0]
+	if len(parts) >= 2 {
+		tunCIDR6 = strings.TrimSpace(parts[1])
+	}
+	return conn, tunCIDR6
 }
 
 func CloudList(fetch bool) ([]Config, []string, error) {
@@ -120,11 +137,12 @@ func CloudList(fetch bool) ([]Config, []string, error) {
 	var cfgs []Config
 	var names []string
 	for i, line := range lines {
-		server, token, ok := ParseConnection(line)
+		conn, tunCIDR6 := parseCloudLine(line)
+		server, token, ok := ParseConnection(conn)
 		if !ok {
 			continue
 		}
-		cfgs = append(cfgs, Config{Server: server, Token: token})
+		cfgs = append(cfgs, Config{Server: server, Token: token, TunCIDR6: tunCIDR6})
 		names = append(names, fmt.Sprintf("cloud-%d", i+1))
 	}
 	return cfgs, names, nil

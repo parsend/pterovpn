@@ -72,6 +72,22 @@ func DelDefaultViaTun(tun string) {
 	_ = execIgnore("ip", "route", "del", "default", "dev", tun)
 }
 
+func AddDefaultViaTun6(tun string, gateway string, metric int) error {
+	cmd := exec.Command("ip", "-6", "route", "add", "default", "via", gateway, "dev", tun, "metric", fmt.Sprintf("%d", metric))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if bytes.Contains(out, []byte("File exists")) {
+		return nil
+	}
+	return fmt.Errorf("ip -6 route add default: %w: %s", err, strings.TrimSpace(string(out)))
+}
+
+func DelDefaultViaTun6(tun string) {
+	_ = execIgnore("ip", "-6", "route", "del", "default", "dev", tun)
+}
+
 func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 	for _, n := range cidrs {
 		if n.IP.To4() == nil {

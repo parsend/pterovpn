@@ -36,11 +36,12 @@ final class ConnectionHandler implements Runnable {
     public void run() {
         boolean handedOff = false;
         Socket s = sock;
+        OutputStream rawOut = null;
         try {
             var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
             s.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
+            rawOut = s.getOutputStream();
             InputStream in = xor.wrapInput(new BufferedInputStream(s.getInputStream()));
-            OutputStream out = xor.wrapOutput(s.getOutputStream());
 
             Protocol.HandshakeResult hr = Protocol.readHandshake(in);
             Protocol.Handshake hs = hr.handshake();
@@ -51,8 +52,10 @@ final class ConnectionHandler implements Runnable {
                 )
             ) {
                 log.warning("bad token from " + s.getRemoteSocketAddress());
+                sendCapabilityByte(rawOut);
                 throw new IOException("bad token");
             }
+            OutputStream out = xor.wrapOutput(rawOut);
             log.info(
                 "Accepted role=" +
                     hs.role() +
@@ -80,10 +83,13 @@ final class ConnectionHandler implements Runnable {
             log.warning("unknown role " + hs.role() + " from " + s.getRemoteSocketAddress());
             throw new IOException("bad role");
         } catch (EOFException ignored) {
+            sendCapabilityByte(rawOut);
         } catch (SocketTimeoutException e) {
             log.warning("handshake timeout from " + s.getRemoteSocketAddress() + " after " + HANDSHAKE_TIMEOUT_MS + "ms");
+            sendCapabilityByte(rawOut);
         } catch (IOException e) {
             log.fine("conn closed: " + e.getMessage());
+            sendCapabilityByte(rawOut);
         } finally {
             if (!handedOff) {
                 try {
@@ -91,6 +97,14 @@ final class ConnectionHandler implements Runnable {
                 } catch (IOException ignored) {}
             }
         }
+    }
+
+    private static void sendCapabilityByte(OutputStream rawOut) {
+        if (rawOut == null) return;
+        try {
+            rawOut.write(Ipv6Detect.hasIPv6() ? 1 : 0);
+            rawOut.flush();
+        } catch (Throwable ignored) {}
     }
 
     private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)

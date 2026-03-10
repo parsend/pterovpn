@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -72,6 +73,9 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		}
 		cleanup := func() {
 			netcfg.DelRoutesViaTun(name, opts.routeCIDRs)
+			if opts.tunCIDR6 != "" && len(opts.routeCIDRs) == 0 {
+				netcfg.DelDefaultViaTun6(name)
+			}
 			if opts.tunCIDR6 != "" {
 				tun.DelAddr(name, opts.tunCIDR6)
 			}
@@ -100,6 +104,14 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if err := netcfg.AddRoutesViaTun(opts.tunName, opts.routeCIDRs, 5); err != nil {
 			return err
 		}
+		if opts.tunCIDR6 != "" && len(opts.routeCIDRs) == 0 {
+			// full-tunnel ipv6 default via fd00:13:37::1 style gateway derived from tun cidr
+			if gw, err := deriveIPv6Gateway(opts.tunCIDR6); err == nil {
+				if err := netcfg.AddDefaultViaTun6(opts.tunName, gw, 5); err != nil {
+					return err
+				}
+			}
+		}
 		if onReady != nil {
 			onReady()
 		}
@@ -117,4 +129,18 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	case err := <-errCh:
 		return err
 	}
+}
+
+func deriveIPv6Gateway(cidr string) (string, error) {
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", err
+	}
+	ip = ip.Mask(ipNet.Mask)
+	b := ip.To16()
+	if b == nil {
+		return "", fmt.Errorf("not ipv6: %s", cidr)
+	}
+	b[15] = 1
+	return net.IP(b).String(), nil
 }

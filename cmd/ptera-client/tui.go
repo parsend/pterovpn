@@ -107,7 +107,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	start := time.Now()
 	dnsOK := checkDNS()
 	rttBefore, _ := probe.Ping(cfg.Server, probeTimeout)
-	probeOK, _ := probe.ProbePterovpn(cfg.Server, probeTimeout)
+	probeOK, _, _ := probe.ProbePterovpn(cfg.Server, probeTimeout)
 
 	record := metrics.SessionRecord{
 		Start:          start,
@@ -171,7 +171,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		prot = &p
 	}
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
-		ok, err := probe.ProbePterovpn(addrs[0], probeTimeout)
+		ok, _, err := probe.ProbePterovpn(addrs[0], probeTimeout)
 		if err != nil || !ok {
 			record.ErrorType = "preCheck"
 			record.End = time.Now()

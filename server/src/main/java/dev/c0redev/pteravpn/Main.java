@@ -24,6 +24,7 @@ public final class Main {
     log = Log.logger(Main.class);
     log.info("Base: " + base);
     log.info("Ports: " + cfg.listenPorts());
+    log.info("IPv6: " + (Ipv6Detect.hasIPv6() ? "available" : "not available"));
     if (cfg.updateEnabled()) {
       Path jp = jarPath();
       if (jp != null) {

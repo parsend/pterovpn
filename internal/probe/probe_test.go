@@ -61,7 +61,7 @@ func TestProbePterovpnRefused(t *testing.T) {
 	addr := l.Addr().String()
 	l.Close()
 
-	ok, err := ProbePterovpn(addr, 100*time.Millisecond)
+	ok, _, err := ProbePterovpn(addr, 100*time.Millisecond)
 	if err == nil || ok {
 		t.Errorf("want err, got ok=%v err=%v", ok, err)
 	}
@@ -88,7 +88,7 @@ func TestProbePterovpnCloseOnBadToken(t *testing.T) {
 		}
 	}()
 
-	ok, err := ProbePterovpn(l.Addr().String(), time.Second)
+	ok, _, err := ProbePterovpn(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -120,7 +120,7 @@ func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
 		}
 	}()
 
-	ok, err := ProbePterovpn(l.Addr().String(), time.Second)
+	ok, _, err := ProbePterovpn(l.Addr().String(), time.Second)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
