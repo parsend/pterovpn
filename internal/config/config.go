@@ -12,6 +12,7 @@ type Config struct {
 	Token      string             `json:"token"`
 	Routes     string             `json:"routes,omitempty"`
 	Exclude    string             `json:"exclude,omitempty"`
+	TunCIDR6   string             `json:"tunCIDR6,omitempty"`
 	Protection *ProtectionOptions `json:"protection,omitempty"`
 }
 

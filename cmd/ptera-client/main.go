@@ -19,6 +19,7 @@ type runOpts struct {
 	token        string
 	tunName      string
 	tunCIDR      string
+	tunCIDR6     string
 	mtu          int
 	routeCIDRs   []*net.IPNet
 	excludeCIDRs []*net.IPNet
@@ -43,6 +44,7 @@ func run() error {
 		token       = flag.String("token", "", "token")
 		tunName     = flag.String("tun", "ptera0", "tun name")
 		tunCIDR     = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
+		tunCIDR6    = flag.String("tun-cidr6", "", "ipv6 tun cidr (e.g. fd00:13:37::2/64)")
 		mtu         = flag.Int("mtu", 1420, "mtu")
 		routes      = flag.String("routes", "", "cidrs to route via tunnel (default=all)")
 		exclude     = flag.String("exclude", "", "cidrs to exclude from tunnel")
@@ -94,6 +96,7 @@ func run() error {
 		token:        *token,
 		tunName:      *tunName,
 		tunCIDR:      *tunCIDR,
+		tunCIDR6:     *tunCIDR6,
 		mtu:          *mtu,
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,

@@ -341,7 +341,7 @@ func (m *Model) refreshCloudItems() {
 }
 
 func newAddInputs() []textinput.Model {
-	return newInputsWithValues("", "", "", "")
+	return newInputsWithValues("", "", "", "", "")
 }
 
 func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
@@ -489,7 +489,7 @@ func fillConnectionFromAnyField(inputs []textinput.Model) []textinput.Model {
 	return inputs
 }
 
-func newInputsWithValues(name, connection, routes, exclude string) []textinput.Model {
+func newInputsWithValues(name, connection, routes, exclude, tunCIDR6 string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
 		t.Placeholder = pl
@@ -501,6 +501,7 @@ func newInputsWithValues(name, connection, routes, exclude string) []textinput.M
 		ti("host:port:key", connection),
 		ti("routes (пусто=all)", routes),
 		ti("exclude", exclude),
+		ti("tun-cidr6 (fd00:.../64)", tunCIDR6),
 	}
 }
 
@@ -768,7 +769,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editing = true
 					m.editingName = m.names[idx]
 					cfg := m.cfgs[idx]
-					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude)
+					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -952,7 +953,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if !ok {
 						m.err = "connection: host:port:key"
 					} else {
-						cfg := config.Config{Server: server, Token: token, Routes: strings.TrimSpace(m.editInputs[2].Value()), Exclude: strings.TrimSpace(m.editInputs[3].Value())}
+						cfg := config.Config{
+							Server:   server,
+							Token:    token,
+							Routes:   strings.TrimSpace(m.editInputs[2].Value()),
+							Exclude:  strings.TrimSpace(m.editInputs[3].Value()),
+							TunCIDR6: strings.TrimSpace(m.editInputs[4].Value()),
+						}
 						if newName != oldName {
 							_ = config.Delete(oldName)
 						}
@@ -988,7 +995,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					server, token, ok := config.ParseConnection(conn)
 					if !ok {
 						m.err = "connection: host:port:key"
-					} else if err := config.Save(name, config.Config{Server: server, Token: token, Routes: strings.TrimSpace(m.addInputs[2].Value()), Exclude: strings.TrimSpace(m.addInputs[3].Value())}); err != nil {
+					} else if err := config.Save(name, config.Config{
+						Server:   server,
+						Token:    token,
+						Routes:   strings.TrimSpace(m.addInputs[2].Value()),
+						Exclude:  strings.TrimSpace(m.addInputs[3].Value()),
+						TunCIDR6: strings.TrimSpace(m.addInputs[4].Value()),
+					}); err != nil {
 						m.err = err.Error()
 					} else {
 						m.reloadCfgs()
@@ -1401,7 +1414,7 @@ func (m Model) View() string {
 			content.WriteString("Удалить конфигурацию \"" + m.deletingCfg + "\"? y/n")
 		} else if m.editing {
 			content.WriteString("Редактирование: " + m.editingName + "\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:"}
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
 			for i := range m.editInputs {
 				content.WriteString(labels[i] + " ")
 				content.WriteString(m.editInputs[i].View())
@@ -1414,7 +1427,7 @@ func (m Model) View() string {
 			}
 		} else if m.adding {
 			content.WriteString("Новая конфигурация\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:"}
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
 			for i := range m.addInputs {
 				content.WriteString(labels[i] + " ")
 				content.WriteString(m.addInputs[i].View())

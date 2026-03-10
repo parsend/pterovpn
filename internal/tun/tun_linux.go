@@ -81,6 +81,23 @@ func Teardown(name, cidr string) {
 	_ = execIgnore("ip", "link", "set", "dev", name, "down")
 }
 
+func AddAddr(name, cidr string) error {
+	if cidr == "" {
+		return nil
+	}
+	if err := run("ip", "addr", "add", cidr, "dev", name); err != nil {
+		return err
+	}
+	return nil
+}
+
+func DelAddr(name, cidr string) {
+	if cidr == "" {
+		return
+	}
+	_ = execIgnore("ip", "addr", "del", cidr, "dev", name)
+}
+
 func run(args ...string) error {
 	if err := execIgnore(args...); err != nil {
 		return err

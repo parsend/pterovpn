@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf8"
@@ -26,6 +28,14 @@ import (
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
 	if opts.proxy {
 		return runProxy(ctx, addrs, opts, onReady)
+	}
+	var v4Routes, v6Routes []*net.IPNet
+	for _, n := range opts.routeCIDRs {
+		if n.IP.To4() != nil {
+			v4Routes = append(v4Routes, n)
+		} else {
+			v6Routes = append(v6Routes, n)
+		}
 	}
 	dr, err := netcfg.GetDefaultRoute()
 	if err != nil {
@@ -51,8 +61,14 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	if err := configureTunWindows(name, opts.tunCIDR, opts.mtu); err != nil {
 		return err
 	}
+	if opts.tunCIDR6 != "" {
+		if err := configureTunWindowsV6(name, opts.tunCIDR6); err != nil {
+			return err
+		}
+	}
 	defer func() {
-		netcfg.DelRoutesViaTun(name, opts.routeCIDRs)
+		delIPv6Routes(name, v6Routes)
+		netcfg.DelRoutesViaTun(name, v4Routes)
 		netcfg.DelExcludeRoutes(opts.excludeCIDRs)
 		netcfg.DelBypass(opts.serverIP)
 	}()
@@ -76,7 +92,10 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	select {
 	case <-ready:
 		clientlog.OK("Tunnel ready, switching routes to %s", name)
-		if err := netcfg.AddRoutesViaTun(name, opts.routeCIDRs, 5); err != nil {
+		if err := netcfg.AddRoutesViaTun(name, v4Routes, 5); err != nil {
+			return err
+		}
+		if err := addIPv6Routes(name, v6Routes, 5); err != nil {
 			return err
 		}
 		if onReady != nil {
@@ -116,6 +135,30 @@ func configureTunWindows(name, cidr string, _ int) error {
 	return fmt.Errorf("netsh: %w: %s", err, msg)
 }
 
+func configureTunWindowsV6(name, cidr string) error {
+	ip, prefix, err := parseCIDRv6(cidr)
+	if err != nil {
+		return err
+	}
+	if ip == "" || prefix == "" {
+		return errors.New("bad ipv6 cidr")
+	}
+	iface := `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+	args := []string{"interface", "ipv6", "set", "address", "name=" + iface, "source=static", "address=" + ip, "prefixlength=" + prefix, "store=active"}
+	out, err := exec.Command("netsh", args...).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := decodeNetshOutput(out)
+	if isAlreadyExistsNetsh(msg) {
+		return nil
+	}
+	if msg == "" {
+		return err
+	}
+	return fmt.Errorf("netsh ipv6 set address: %w: %s", err, msg)
+}
+
 func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
 	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -150,6 +193,65 @@ func parseCIDR(cidr string) (ip, mask string, err error) {
 		mask = "255.255.255.0"
 	}
 	return ip, mask, nil
+}
+
+func parseCIDRv6(cidr string) (ip, prefix string, err error) {
+	idx := strings.Index(cidr, "/")
+	if idx < 0 {
+		return "", "", errors.New("bad cidr")
+	}
+	ip = strings.TrimSpace(cidr[:idx])
+	prefix = strings.TrimSpace(cidr[idx+1:])
+	if ip == "" || prefix == "" {
+		return "", "", errors.New("bad cidr")
+	}
+	return ip, prefix, nil
+}
+
+func addIPv6Routes(iface string, cidrs []*net.IPNet, metric int) error {
+	if len(cidrs) == 0 {
+		return nil
+	}
+	ifaceQuoted := `"` + strings.ReplaceAll(iface, `"`, `\"`) + `"`
+	metricStr := strconv.Itoa(metric)
+	for _, n := range cidrs {
+		args := []string{
+			"interface", "ipv6", "add", "route",
+			"prefix=" + n.String(),
+			"interface=" + ifaceQuoted,
+			"metric=" + metricStr,
+			"store=active",
+		}
+		out, err := exec.Command("netsh", args...).CombinedOutput()
+		if err == nil {
+			continue
+		}
+		msg := decodeNetshOutput(out)
+		if isAlreadyExistsNetsh(msg) {
+			continue
+		}
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("netsh ipv6 add route %s: %w: %s", n.String(), err, msg)
+	}
+	return nil
+}
+
+func delIPv6Routes(iface string, cidrs []*net.IPNet) {
+	if len(cidrs) == 0 {
+		return
+	}
+	ifaceQuoted := `"` + strings.ReplaceAll(iface, `"`, `\"`) + `"`
+	for _, n := range cidrs {
+		args := []string{
+			"interface", "ipv6", "delete", "route",
+			"prefix=" + n.String(),
+			"interface=" + ifaceQuoted,
+			"store=active",
+		}
+		_ = exec.Command("netsh", args...).Run()
+	}
 }
 
 func decodeNetshOutput(out []byte) string {

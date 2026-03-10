@@ -59,6 +59,12 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			_ = f.Close()
 			return nil, nil, err
 		}
+		if opts.tunCIDR6 != "" {
+			if err := tun.AddAddr(name, opts.tunCIDR6); err != nil {
+				_ = f.Close()
+				return nil, nil, err
+			}
+		}
 		dev, err := fdbased.Open(strconv.Itoa(int(f.Fd())), uint32(opts.mtu), 0)
 		if err != nil {
 			_ = f.Close()
@@ -66,6 +72,9 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		}
 		cleanup := func() {
 			netcfg.DelRoutesViaTun(name, opts.routeCIDRs)
+			if opts.tunCIDR6 != "" {
+				tun.DelAddr(name, opts.tunCIDR6)
+			}
 			tun.Teardown(name, opts.tunCIDR)
 			dev.Close()
 			_ = f.Close()

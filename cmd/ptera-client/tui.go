@@ -185,11 +185,13 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			return nil, errors.New("preCheck: server is not pterovpn")
 		}
 	}
+	tunCIDR6 := strings.TrimSpace(cfg.TunCIDR6)
 	opts := runOpts{
 		serverIP:     sip,
 		token:        cfg.Token,
 		tunName:      "ptera0",
 		tunCIDR:      "10.13.37.2/24",
+		tunCIDR6:     tunCIDR6,
 		mtu:          1420,
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,
