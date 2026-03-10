@@ -12,6 +12,7 @@ import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongConsumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
@@ -60,6 +61,7 @@ final class TcpReactorPool {
   private static final class Reactor {
     private static final int BUFFER_SIZE = 32 * 1024;
     private static final long CONNECT_TIMEOUT_MS = 10_000;
+    private static final int MAX_PENDING_BYTES = 4 * 1024 * 1024;
     private static final Logger log = Log.logger(Reactor.class);
 
     private final Selector selector;
@@ -255,6 +257,8 @@ final class TcpReactorPool {
       private boolean connected;
       private boolean connecting = true;
       private final long connectDeadlineNanos = System.nanoTime() + CONNECT_TIMEOUT_NANOS;
+      private long pendingToClientBytes;
+      private long pendingToRemoteBytes;
 
       Session(XorStream xor, byte[] initialClientData, boolean initialClientDataDecrypted) {
         this.xor = xor;
@@ -263,6 +267,7 @@ final class TcpReactorPool {
             xor.decode(initialClientData, 0, initialClientData.length);
           }
           toRemote.add(ByteBuffer.wrap(initialClientData));
+          pendingToRemoteBytes += initialClientData.length;
         }
       }
 
@@ -290,7 +295,7 @@ final class TcpReactorPool {
         connected = true;
         connecting = false;
         if (remoteKey != null && remoteKey.isValid()) {
-          setInterestOps(remoteKey, SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
+          updateRemoteInterest();
         }
         updateClientInterest();
       }
@@ -330,6 +335,10 @@ final class TcpReactorPool {
       private void readFromClient() {
         try {
           if (clientKey == null || !clientKey.isValid()) return;
+          if (pendingToRemoteBytes >= MAX_PENDING_BYTES) {
+            setInterestOps(clientKey, clientKey.interestOps() & ~SelectionKey.OP_READ);
+            return;
+          }
           SocketChannel client = (SocketChannel) clientKey.channel();
           int n = client.read(buffer.clear());
           if (n == -1) {
@@ -343,8 +352,12 @@ final class TcpReactorPool {
           buffer.get(data);
           xor.decode(data, 0, n);
           toRemote.add(ByteBuffer.wrap(data));
+          pendingToRemoteBytes += n;
+          if (pendingToRemoteBytes >= MAX_PENDING_BYTES) {
+            setInterestOps(clientKey, clientKey.interestOps() & ~SelectionKey.OP_READ);
+          }
           if (connected && remoteKey != null && remoteKey.isValid()) {
-            setInterestOps(remoteKey, remoteKey.interestOps() | SelectionKey.OP_WRITE);
+            updateRemoteInterest();
           }
         } catch (IOException e) {
           close("client read failed");
@@ -356,6 +369,10 @@ final class TcpReactorPool {
       private void readFromRemote() {
         try {
           if (remote == null || (remoteKey != null && !remoteKey.isValid())) return;
+          if (pendingToClientBytes >= MAX_PENDING_BYTES) {
+            setInterestOps(remoteKey, remoteKey.interestOps() & ~SelectionKey.OP_READ);
+            return;
+          }
           int n = remote.read(buffer.clear());
           if (n == -1) {
             close("remote closed");
@@ -368,8 +385,12 @@ final class TcpReactorPool {
           buffer.get(data);
           xor.encode(data, 0, n);
           toClient.add(ByteBuffer.wrap(data));
+          pendingToClientBytes += n;
+          if (pendingToClientBytes >= MAX_PENDING_BYTES) {
+            setInterestOps(remoteKey, remoteKey.interestOps() & ~SelectionKey.OP_READ);
+          }
           if (clientKey != null && clientKey.isValid()) {
-            setInterestOps(clientKey, clientKey.interestOps() | SelectionKey.OP_WRITE);
+            updateClientInterest();
           }
         } catch (IOException e) {
           close("remote read failed");
@@ -380,19 +401,24 @@ final class TcpReactorPool {
 
       private void flushToClient() {
         if (clientKey == null || !clientKey.isValid()) return;
-        flush(clientKey, toClient, clientKey.channel());
+        flush(clientKey, toClient, clientKey.channel(), c -> {
+          pendingToClientBytes -= c;
+          updateRemoteInterest();
+        });
         updateClientInterest();
       }
 
       private void flushToRemote() {
         if (remoteKey == null || !remoteKey.isValid()) return;
-        flush(remoteKey, toRemote, remote);
-        if (remoteKey != null && remoteKey.isValid()) {
-          setInterestOps(remoteKey, SelectionKey.OP_READ | (toRemote.isEmpty() ? 0 : SelectionKey.OP_WRITE));
-        }
+        flush(remoteKey, toRemote, remote, c -> {
+          pendingToRemoteBytes -= c;
+          updateClientInterest();
+        });
+        updateRemoteInterest();
       }
 
-      private void flush(SelectionKey key, ArrayDeque<ByteBuffer> q, java.nio.channels.SelectableChannel ch) {
+      private void flush(SelectionKey key, ArrayDeque<ByteBuffer> q,
+          java.nio.channels.SelectableChannel ch, LongConsumer onFlushed) {
         if (!key.isValid()) return;
         SocketChannel socket = (SocketChannel) ch;
         try {
@@ -400,10 +426,11 @@ final class TcpReactorPool {
             ByteBuffer b = q.peek();
             socket.write(b);
             if (b.hasRemaining()) {
-            setInterestOps(key, key.interestOps() | SelectionKey.OP_WRITE);
+              setInterestOps(key, key.interestOps() | SelectionKey.OP_WRITE);
               return;
             }
             q.poll();
+            onFlushed.accept((long) b.capacity());
           }
           setInterestOps(key, key.interestOps() & ~SelectionKey.OP_WRITE);
         } catch (IOException e) {
@@ -430,9 +457,16 @@ final class TcpReactorPool {
 
       private void updateClientInterest() {
         if (clientKey == null || !clientKey.isValid()) return;
-        int ops = SelectionKey.OP_READ;
+        int ops = (pendingToRemoteBytes < MAX_PENDING_BYTES ? SelectionKey.OP_READ : 0);
         if (!toClient.isEmpty()) ops |= SelectionKey.OP_WRITE;
         setInterestOps(clientKey, ops);
+      }
+
+      private void updateRemoteInterest() {
+        if (remoteKey == null || !remoteKey.isValid()) return;
+        int ops = (pendingToClientBytes < MAX_PENDING_BYTES ? SelectionKey.OP_READ : 0);
+        if (!toRemote.isEmpty()) ops |= SelectionKey.OP_WRITE;
+        setInterestOps(remoteKey, ops);
       }
 
       void close(String reason) {
@@ -442,6 +476,10 @@ final class TcpReactorPool {
         } else {
           log.fine("tcp close while connecting: " + reason);
         }
+        toClient.clear();
+        toRemote.clear();
+        pendingToClientBytes = 0;
+        pendingToRemoteBytes = 0;
         try {
           if (clientKey != null) clientKey.cancel();
         } catch (Exception ignored) {}
