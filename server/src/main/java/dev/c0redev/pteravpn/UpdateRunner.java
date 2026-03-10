@@ -48,6 +48,11 @@ final class UpdateRunner implements Runnable {
     }
     long intervalMs = cfg.updateCheckIntervalMinutes() * 60L * 1000;
     log.info("Update runner started, current version " + currentVersion + ", check every " + cfg.updateCheckIntervalMinutes() + " min");
+    try {
+      checkAndApply();
+    } catch (Exception e) {
+      log.warning("Initial update check failed: " + e.getMessage());
+    }
     while (true) {
       try {
         Thread.sleep(intervalMs);

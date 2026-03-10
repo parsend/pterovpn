@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+Created-By: Maven JAR Plugin 3.4.2
+Build-Jdk-Spec: 21
+Main-Class: dev.c0redev.pteravpn.Launcher
+Implementation-Version: 1.6.3
+

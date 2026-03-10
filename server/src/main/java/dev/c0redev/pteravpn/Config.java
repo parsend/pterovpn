@@ -80,7 +80,7 @@ final class Config {
     boolean updateEnabled = "true".equalsIgnoreCase(p.getProperty("update.enabled", "false").trim());
     String updateRepo = firstNonEmpty(p.getProperty("update.repo"), "parsend/pterovpn");
     int updateCheckIntervalMinutes = Math.max(15, parseInt(p.getProperty("update.checkIntervalMinutes"), 60));
-    int updateRestartExitCode = parseInt(p.getProperty("update.restartExitCode"), 0);
+    int updateRestartExitCode = parseInt(p.getProperty("update.restartExitCode"), 1);
     return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug,
         updateEnabled, updateRepo, updateCheckIntervalMinutes, updateRestartExitCode);
   }

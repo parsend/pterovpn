@@ -39,12 +39,6 @@ public final class Main {
       }
     }
 
-    if (cfg.updateEnabled()) {
-      Thread updateThread = new Thread(new UpdateRunner(jarPath(), cfg), "update-runner");
-      updateThread.setDaemon(true);
-      updateThread.start();
-    }
-
     int reactorThreads = Math.max(1, Runtime.getRuntime().availableProcessors());
     log.info("TCP reactor pool: " + reactorThreads + " threads");
     ExecutorService acceptPool = Executors.newCachedThreadPool();

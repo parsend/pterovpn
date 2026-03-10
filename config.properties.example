@@ -1,9 +1,9 @@
-listenPorts=5555
+listenPorts=0
 token=your-secret-key
 udpChannels=4
 publicHost=1.2.3.4
-debug=false
+debug=true
 update.enabled=true
 update.repo=parsend/pterovpn
-update.checkIntervalMinutes=60
-update.restartExitCode=0
+update.checkIntervalMinutes=1
+update.restartExitCode=1
