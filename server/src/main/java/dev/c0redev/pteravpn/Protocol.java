@@ -34,14 +34,15 @@ final class Protocol {
 
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
     if (!in.markSupported()) return Optional.empty();
-    if (in.available() < 2) return Optional.empty();
     in.mark(MAX_OPTS + 4);
-    int optsLen = readU16(in);
-    if (optsLen <= 0 || optsLen > MAX_OPTS) {
+    int optsLen;
+    try {
+      optsLen = readU16(in);
+    } catch (EOFException e) {
       in.reset();
       return Optional.empty();
     }
-    if (in.available() < optsLen) {
+    if (optsLen <= 0 || optsLen > MAX_OPTS) {
       in.reset();
       return Optional.empty();
     }
