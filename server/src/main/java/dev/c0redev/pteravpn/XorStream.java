@@ -19,6 +19,8 @@ final class XorStream {
 
   InputStream wrapInput(InputStream in) {
     return new FilterInputStream(in) {
+      private int markPos = -1;
+
       @Override
       public int read() throws IOException {
         int b = in.read();
@@ -37,6 +39,25 @@ final class XorStream {
           rPos++;
         }
         return n;
+      }
+
+      @Override
+      public boolean markSupported() {
+        return in.markSupported();
+      }
+
+      @Override
+      public synchronized void mark(int readlimit) {
+        super.mark(readlimit);
+        markPos = rPos;
+      }
+
+      @Override
+      public synchronized void reset() throws IOException {
+        super.reset();
+        if (markPos >= 0) {
+          rPos = markPos;
+        }
       }
     };
   }

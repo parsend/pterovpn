@@ -49,7 +49,6 @@ final class Protocol {
     byte[] buf = readN(in, optsLen);
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
     if (parsed.isEmpty()) {
-      in.reset();
       return Optional.empty();
     }
     return parsed;
