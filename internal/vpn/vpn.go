@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,12 +28,14 @@ import (
 )
 
 type Options struct {
-	TunFD       int
-	MTU         int
-	Token       string
-	ServerAddrs []string
-	Ready       func()
-	Device      device.Device
+	TunFD        int
+	MTU          int
+	Token        string
+	Transport    string
+	TLSName      string
+	ServerAddrs  []string
+	Ready        func()
+	Device       device.Device
 	CreateDevice func() (device.Device, func(), error)
 	Protection   *config.ProtectionOptions
 }
@@ -43,7 +46,7 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	clientlog.Info("vpn: starting, servers=%v", opt.ServerAddrs)
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Transport, opt.TLSName, opt.Protection)
 	if err != nil {
 		return err
 	}
@@ -105,13 +108,13 @@ type udpMux struct {
 	assoc map[udpAssocKey]*udpAssoc
 }
 
-func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
+func newUDPMux(addrs []string, token string, n int, transport string, tlsName string, prot *config.ProtectionOptions) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot)
+		c, err := newUDPChan(byte(i), addrs, token, transport, tlsName, m.dispatch, prot)
 		if err != nil {
 			clientlog.Drop("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
@@ -180,12 +183,12 @@ type udpChan struct {
 	cb     func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, transport string, tlsName string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
 		a := addrs[(start+i)%len(addrs)]
-		c, err := dialTCP(a, token)
+		rawConn, handshakeConn, err := dialTCP(a, token)
 		if err != nil {
 			last = err
 			continue
@@ -200,14 +203,6 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			maxPad = 64
 		}
 		bufSize := protocol.BufSizeForConn(slot)
-		uc := &udpChan{
-			conn:   c,
-			r:      bufio.NewReaderSize(c, bufSize),
-			w:      bufio.NewWriterSize(c, bufSize),
-			maxPad: maxPad,
-			stop:   make(chan struct{}),
-			cb:     cb,
-		}
 		prefixLen := 0
 		junkCount, junkMin, junkMax := 0, 64, 1024
 		if prot != nil {
@@ -243,22 +238,51 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 		if prot != nil {
 			junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
 		}
-		if err := protocol.WriteJunkOrTLSLike(uc.w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = uc.w.Flush() }); err != nil {
-			_ = c.Close()
+		w := bufio.NewWriterSize(handshakeConn, bufSize)
+		if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
+			_ = rawConn.Close()
 			last = err
 			continue
 		}
 		if !strings.EqualFold(flushPolicy, "perChunk") {
-			_ = uc.w.Flush()
+			if err := w.Flush(); err != nil {
+				_ = rawConn.Close()
+				last = err
+				continue
+			}
 		}
 		var optsJSON []byte
-		if prot != nil {
-			optsJSON, _ = json.Marshal(prot)
+		if prot != nil || strings.EqualFold(transport, "tls") {
+			opts, _ := json.Marshal(effectiveTransportOptions(prot, transport, tlsName))
+			optsJSON = opts
 		}
-		if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(uc.w, protocol.RoleUDP(), id, token, prefixLen, optsJSON, slot); err != nil {
-			_ = c.Close()
+		if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleUDP(), id, token, prefixLen, optsJSON, slot); err != nil {
+			_ = rawConn.Close()
 			last = err
 			continue
+		}
+		if err := w.Flush(); err != nil {
+			_ = rawConn.Close()
+			last = err
+			continue
+		}
+		connForTraffic := handshakeConn
+		if strings.EqualFold(transport, "tls") {
+			conn, err := upgradeToTLS(rawConn, tlsName)
+			if err != nil {
+				_ = rawConn.Close()
+				last = err
+				continue
+			}
+			connForTraffic = conn
+		}
+		uc := &udpChan{
+			conn:   connForTraffic,
+			r:      bufio.NewReaderSize(connForTraffic, bufSize),
+			w:      bufio.NewWriterSize(connForTraffic, bufSize),
+			maxPad: maxPad,
+			stop:   make(chan struct{}),
+			cb:     cb,
 		}
 		clientlog.Traffic("vpn: udp channel %d uses server %s", id, a)
 		go uc.readLoop()
@@ -390,7 +414,6 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	}
 	defer sconn.Close()
 
-	
 	deadline := time.Now().Add(5 * time.Minute)
 	_ = tc.SetReadDeadline(deadline)
 	_ = tc.SetWriteDeadline(deadline)
@@ -417,13 +440,14 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 }
 
 func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16, slot int64) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
-	sconn, err := dialTCP(addr, h.opt.Token)
+	handshakeConn, rawConn, err := dialTCP(addr, h.opt.Token)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	conn := handshakeConn
 	bufSize := protocol.BufSizeForConn(slot)
-	r := bufio.NewReaderSize(sconn, bufSize)
-	w := bufio.NewWriterSize(sconn, bufSize)
+	r := bufio.NewReaderSize(handshakeConn, bufSize)
+	w := bufio.NewWriterSize(handshakeConn, bufSize)
 	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
 	if h.opt.Protection != nil {
 		prefixLen = h.opt.Protection.PadS1 + h.opt.Protection.PadS2 + h.opt.Protection.PadS3
@@ -455,34 +479,109 @@ func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16,
 		junkStyle, flushPolicy = h.opt.Protection.JunkStyle, h.opt.Protection.FlushPolicy
 	}
 	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		return sconn, nil, nil, err
+		_ = rawConn.Close()
+		return nil, nil, nil, err
 	}
 	if !strings.EqualFold(flushPolicy, "perChunk") {
-		_ = w.Flush()
+		if err := w.Flush(); err != nil {
+			_ = rawConn.Close()
+			return nil, nil, nil, err
+		}
 	}
 	var optsJSON []byte
-	if h.opt.Protection != nil {
-		optsJSON, _ = json.Marshal(h.opt.Protection)
+	if h.opt.Protection != nil || strings.EqualFold(h.opt.Transport, "tls") {
+		opts := effectiveTransportOptions(h.opt.Protection, h.opt.Transport, h.opt.TLSName)
+		optsJSON, _ = json.Marshal(opts)
 	}
 	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON, slot); err != nil {
-		return sconn, nil, nil, err
+		_ = rawConn.Close()
+		return nil, nil, nil, err
 	}
 	if err := protocol.WriteTcpConnect(w, dstIP, dstPort); err != nil {
-		return sconn, nil, nil, err
+		_ = rawConn.Close()
+		return nil, nil, nil, err
 	}
-	return sconn, r, w, nil
+	if err := w.Flush(); err != nil {
+		_ = rawConn.Close()
+		return nil, nil, nil, err
+	}
+	if strings.EqualFold(h.opt.Transport, "tls") {
+		tlsConn, err := upgradeToTLS(rawConn, h.opt.TLSName)
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, nil, nil, err
+		}
+		conn = tlsConn
+		r = bufio.NewReaderSize(conn, bufSize)
+		w = bufio.NewWriterSize(conn, bufSize)
+	}
+	return conn, r, w, nil
 }
 
-func dialTCP(addr string, token string) (net.Conn, error) {
+func dialTCP(addr string, token string) (net.Conn, net.Conn, error) {
 	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	c, err := d.Dial("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tc, ok := c.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
-	return obfuscate.WrapConn(c, token), nil
+	return obfuscate.WrapConn(c, token), c, nil
+}
+
+func effectiveTransportOptions(prot *config.ProtectionOptions, transport string, tlsName string) *config.ProtectionOptions {
+	effective := normalizeTransportOptions(prot)
+	effective.Transport = strings.ToLower(strings.TrimSpace(transport))
+	if effective.Transport != "tls" {
+		effective.Transport = "xor"
+	}
+	effective.TLSName = strings.TrimSpace(tlsName)
+	return effective
+}
+
+func normalizeTransportOptions(prot *config.ProtectionOptions) *config.ProtectionOptions {
+	if prot == nil {
+		return &config.ProtectionOptions{}
+	}
+	return &config.ProtectionOptions{
+		Obfuscation: prot.Obfuscation,
+		JunkCount:   prot.JunkCount,
+		JunkMin:     prot.JunkMin,
+		JunkMax:     prot.JunkMax,
+		PadS1:       prot.PadS1,
+		PadS2:       prot.PadS2,
+		PadS3:       prot.PadS3,
+		PadS4:       prot.PadS4,
+		PreCheck:    prot.PreCheck,
+		MagicSplit:  prot.MagicSplit,
+		JunkStyle:   prot.JunkStyle,
+		FlushPolicy: prot.FlushPolicy,
+		Transport:   prot.Transport,
+		TLSName:     prot.TLSName,
+	}
+}
+
+func upgradeToTLS(rawConn net.Conn, tlsName string) (net.Conn, error) {
+	serverName := strings.TrimSpace(tlsName)
+	if serverName == "" && rawConn != nil && rawConn.RemoteAddr() != nil {
+		host, _, err := net.SplitHostPort(rawConn.RemoteAddr().String())
+		if err == nil {
+			serverName = host
+		} else {
+			serverName = rawConn.RemoteAddr().String()
+		}
+	}
+	cfg := &tls.Config{
+		ServerName:         serverName,
+		InsecureSkipVerify: true,
+	}
+	tlsConn := tls.Client(rawConn, cfg)
+	if err := tlsConn.Handshake(); err != nil {
+		_ = tlsConn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
 }
 
 func (h *handler) isServerAddr(dstIP net.IP, dstPort uint16) bool {

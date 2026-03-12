@@ -189,6 +189,8 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	opts := runOpts{
 		serverIP:     sip,
 		token:        cfg.Token,
+		transport:    resolveClientTransport(cfg.Transport),
+		tlsName:      strings.TrimSpace(cfg.TLSName),
 		tunName:      "ptera0",
 		tunCIDR:      "10.13.37.2/24",
 		tunCIDR6:     tunCIDR6,

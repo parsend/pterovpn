@@ -1,3 +1,4 @@
+
 //go:build linux
 
 package main
@@ -31,7 +32,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if onReady != nil {
 			onReady()
 		}
-		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.transport, opts.tlsName, opts.protection)
 	}
 	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -91,10 +92,12 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
 			CreateDevice: createDevice,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			Token:        opts.token,
+			Transport:    opts.transport,
+			TLSName:      opts.tlsName,
+			ServerAddrs:  addrs,
+			Ready:        func() { close(ready) },
+			Protection:   opts.protection,
 		})
 	}()
 
@@ -105,7 +108,6 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			return err
 		}
 		if opts.tunCIDR6 != "" && len(opts.routeCIDRs) == 0 {
-			// full-tunnel ipv6 default via fd00:13:37::1 style gateway derived from tun cidr
 			if gw, err := deriveIPv6Gateway(opts.tunCIDR6); err == nil {
 				if err := netcfg.AddDefaultViaTun6(opts.tunName, gw, 5); err != nil {
 					return err

@@ -1,3 +1,4 @@
+
 //go:build windows
 
 package main
@@ -83,6 +84,8 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			Device:      dev,
 			MTU:         opts.mtu,
 			Token:       opts.token,
+			Transport:   opts.transport,
+			TLSName:     opts.tlsName,
 			ServerAddrs: addrs,
 			Ready:       func() { close(ready) },
 			Protection:  opts.protection,
@@ -168,11 +171,11 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 		}
 		defer sysproxy.Clear()
 	}
-		clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
+	clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
 	if onReady != nil {
 		onReady()
 	}
-	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.transport, opts.tlsName, opts.protection)
 }
 
 func parseCIDR(cidr string) (ip, mask string, err error) {

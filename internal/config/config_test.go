@@ -31,6 +31,64 @@ func TestSaveLoadDelete(t *testing.T) {
 	}
 }
 
+func TestLoadOldConfigKeepsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	defer os.Unsetenv("XDG_CONFIG_HOME")
+
+	configDir, err := Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(configDir, "legacy.json"),
+		[]byte(`{"server":"1.1.1.1:443","token":"legacy","routes":"","exclude":""}`),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Load(filepath.Join(configDir, "legacy.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Transport != "" {
+		t.Errorf("transport=%q", got.Transport)
+	}
+	if got.TLSName != "" {
+		t.Errorf("tlsName=%q", got.TLSName)
+	}
+}
+
+func TestSaveLoadWithTransportFields(t *testing.T) {
+	dir := t.TempDir()
+	os.Setenv("XDG_CONFIG_HOME", dir)
+	defer os.Unsetenv("XDG_CONFIG_HOME")
+
+	c := Config{
+		Server:    "1.2.3.4:443",
+		Token:     "secret",
+		Transport: "tls",
+		TLSName:   "vpn.example.com",
+	}
+	if err := Save("transport", c); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := LoadByName("transport")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Transport != "tls" {
+		t.Errorf("transport=%q", c2.Transport)
+	}
+	if c2.TLSName != "vpn.example.com" {
+		t.Errorf("tlsName=%q", c2.TLSName)
+	}
+}
+
 func TestSanitizeName(t *testing.T) {
 	for _, tc := range []struct {
 		in, want string

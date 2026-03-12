@@ -104,6 +104,8 @@ class ProtocolTest {
     var opt = Protocol.ClientOptions.parse("{\"padS4\":48}");
     assertTrue(opt.isPresent());
     assertEquals(48, opt.get().padS4());
+    assertEquals("xor", opt.get().transport());
+    assertEquals("", opt.get().tlsName());
   }
 
   @Test
@@ -111,6 +113,39 @@ class ProtocolTest {
     var opt = Protocol.ClientOptions.parse("{}");
     assertTrue(opt.isPresent());
     assertEquals(32, opt.get().padS4());
+    assertEquals("xor", opt.get().transport());
+    assertEquals("", opt.get().tlsName());
+  }
+
+  @Test
+  void clientOptionsParseTransportTls() {
+    var opt = Protocol.ClientOptions.parse(
+      "{\"padS4\":12,\"transport\":\"tls\",\"tlsName\":\"vpn.example.com\"}"
+    );
+    assertTrue(opt.isPresent());
+    assertEquals(12, opt.get().padS4());
+    assertEquals("tls", opt.get().transport());
+    assertEquals("vpn.example.com", opt.get().tlsName());
+  }
+
+  @Test
+  void clientOptionsParseTransportUnknownDefaultsToXor() {
+    var opt = Protocol.ClientOptions.parse(
+      "{\"transport\":\"quic\",\"tlsName\":\"x\",\"padS4\":16}"
+    );
+    assertTrue(opt.isPresent());
+    assertEquals("xor", opt.get().transport());
+    assertEquals(16, opt.get().padS4());
+  }
+
+  @Test
+  void clientOptionsParseTransportWithWhitespace() {
+    var opt = Protocol.ClientOptions.parse(
+      "{ \"transport\" : \"TLS\" , \"tlsName\" : \"edge.example\" }"
+    );
+    assertTrue(opt.isPresent());
+    assertEquals("tls", opt.get().transport());
+    assertEquals("edge.example", opt.get().tlsName());
   }
 
   @Test

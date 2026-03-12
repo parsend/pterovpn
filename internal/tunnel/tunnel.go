@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"strings"
@@ -12,16 +13,24 @@ import (
 	"github.com/parsend/pterovpn/internal/protocol"
 )
 
-func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions) (net.Conn, error) {
+func Dial(
+	serverAddrs []string,
+	targetIP net.IP,
+	targetPort uint16,
+	token string,
+	prot *config.ProtectionOptions,
+	transport string,
+	tlsName string,
+) (net.Conn, error) {
 	addr := pickAddr(serverAddrs, targetIP, targetPort)
-	c, err := dialServer(addr, token)
+	handshakeConn, rawConn, err := dialServer(addr, token)
 	if err != nil {
 		return nil, err
 	}
 	slot := protocol.TimeSlot()
 	bufSize := protocol.BufSizeForConn(slot)
-	r := bufio.NewReaderSize(c, bufSize)
-	w := bufio.NewWriterSize(c, bufSize)
+	r := bufio.NewReaderSize(handshakeConn, bufSize)
+	w := bufio.NewWriterSize(handshakeConn, bufSize)
 	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
 	if prot != nil {
 		prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
@@ -57,25 +66,43 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 		junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
 	}
 	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		c.Close()
+		_ = rawConn.Close()
 		return nil, err
 	}
 	if !strings.EqualFold(flushPolicy, "perChunk") {
-		_ = w.Flush()
+		if err := w.Flush(); err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
 	}
 	var optsJSON []byte
-	if prot != nil {
-		optsJSON, _ = json.Marshal(prot)
+	if prot != nil || strings.EqualFold(transport, "tls") {
+		opts := effectiveTransportOptions(prot, transport, tlsName)
+		optsJSON, _ = json.Marshal(opts)
 	}
 	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot); err != nil {
-		c.Close()
+		_ = rawConn.Close()
 		return nil, err
 	}
 	if err := protocol.WriteTcpConnect(w, targetIP, targetPort); err != nil {
-		c.Close()
+		_ = rawConn.Close()
 		return nil, err
 	}
-	return &tunnelConn{Conn: c, r: r}, nil
+	if err := w.Flush(); err != nil {
+		_ = rawConn.Close()
+		return nil, err
+	}
+	connForTraffic := handshakeConn
+	if strings.EqualFold(transport, "tls") {
+		tlsConn, err := upgradeToTLS(rawConn, tlsName)
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+		connForTraffic = tlsConn
+		r = bufio.NewReaderSize(connForTraffic, bufSize)
+	}
+	return &tunnelConn{Conn: connForTraffic, r: r}, nil
 }
 
 type tunnelConn struct {
@@ -87,16 +114,75 @@ func (c *tunnelConn) Read(p []byte) (n int, err error) {
 	return c.r.Read(p)
 }
 
-func dialServer(addr, token string) (net.Conn, error) {
+func dialServer(addr, token string) (net.Conn, net.Conn, error) {
 	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	c, err := d.Dial("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tc, ok := c.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
-	return obfuscate.WrapConn(c, token), nil
+	rawConn, wrappedConn := c, obfuscate.WrapConn(c, token)
+	return wrappedConn, rawConn, nil
+}
+
+func effectiveTransportOptions(
+	prot *config.ProtectionOptions,
+	transport string,
+	tlsName string,
+) *config.ProtectionOptions {
+	effective := normalizeTransportOptions(prot)
+	effective.Transport = strings.ToLower(strings.TrimSpace(transport))
+	if effective.Transport != "tls" {
+		effective.Transport = "xor"
+	}
+	effective.TLSName = strings.TrimSpace(tlsName)
+	return effective
+}
+
+func normalizeTransportOptions(prot *config.ProtectionOptions) *config.ProtectionOptions {
+	if prot == nil {
+		return &config.ProtectionOptions{}
+	}
+	return &config.ProtectionOptions{
+		Obfuscation: prot.Obfuscation,
+		JunkCount:   prot.JunkCount,
+		JunkMin:     prot.JunkMin,
+		JunkMax:     prot.JunkMax,
+		PadS1:       prot.PadS1,
+		PadS2:       prot.PadS2,
+		PadS3:       prot.PadS3,
+		PadS4:       prot.PadS4,
+		PreCheck:    prot.PreCheck,
+		MagicSplit:  prot.MagicSplit,
+		JunkStyle:   prot.JunkStyle,
+		FlushPolicy: prot.FlushPolicy,
+		Transport:   prot.Transport,
+		TLSName:     prot.TLSName,
+	}
+}
+
+func upgradeToTLS(rawConn net.Conn, tlsName string) (net.Conn, error) {
+	serverName := strings.TrimSpace(tlsName)
+	if serverName == "" && rawConn != nil && rawConn.RemoteAddr() != nil {
+		host, _, err := net.SplitHostPort(rawConn.RemoteAddr().String())
+		if err == nil {
+			serverName = host
+		} else {
+			serverName = rawConn.RemoteAddr().String()
+		}
+	}
+	cfg := &tls.Config{
+		ServerName:         serverName,
+		InsecureSkipVerify: true,
+	}
+	tlsConn := tls.Client(rawConn, cfg)
+	if err := tlsConn.Handshake(); err != nil {
+		_ = tlsConn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
 }
 
 func pickAddr(addrs []string, ip net.IP, port uint16) string {

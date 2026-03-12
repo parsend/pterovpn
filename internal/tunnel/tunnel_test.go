@@ -32,3 +32,5 @@ func TestPickAddrSingle(t *testing.T) {
 		t.Errorf("single addr: got %s", addr)
 	}
 }
+
+func TestDialTcpUpgradesToTLS(t *testing.T) {}

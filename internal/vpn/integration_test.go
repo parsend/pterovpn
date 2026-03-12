@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
 )
@@ -96,5 +97,53 @@ func TestObfuscatedUDPFrameOverTCP(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout")
+	}
+}
+
+func TestEffectiveTransportOptionsDefaultsToXor(t *testing.T) {
+	opts := effectiveTransportOptions(nil, "xor", "")
+	if opts.Transport != "xor" {
+		t.Errorf("transport=%q", opts.Transport)
+	}
+	if opts.TLSName != "" {
+		t.Errorf("tlsName=%q", opts.TLSName)
+	}
+}
+
+func TestEffectiveTransportOptionsKeepsTLS(t *testing.T) {
+	opts := effectiveTransportOptions(nil, "tls", "vpn.example")
+	if opts.Transport != "tls" {
+		t.Errorf("transport=%q", opts.Transport)
+	}
+	if opts.TLSName != "vpn.example" {
+		t.Errorf("tlsName=%q", opts.TLSName)
+	}
+}
+
+func TestEffectiveTransportOptionsDefaultsInvalidTransport(t *testing.T) {
+	opts := effectiveTransportOptions(nil, "quic", "x")
+	if opts.Transport != "xor" {
+		t.Errorf("transport=%q", opts.Transport)
+	}
+}
+
+func TestNormalizeTransportOptionsCopiesProtection(t *testing.T) {
+	base := &config.ProtectionOptions{PadS4: 12, Transport: "tls", TLSName: "x"}
+	cloned := normalizeTransportOptions(base)
+	if cloned == base {
+		t.Fatal("expected copy")
+	}
+	if cloned.PadS4 != 12 {
+		t.Errorf("padS4=%d", cloned.PadS4)
+	}
+	if cloned.Transport != "tls" || cloned.TLSName != "x" {
+		t.Errorf("transport=%q tlsName=%q", cloned.Transport, cloned.TLSName)
+	}
+}
+
+func TestNormalizeTransportOptionsNilSafe(t *testing.T) {
+	opts := normalizeTransportOptions(nil)
+	if opts == nil {
+		t.Fatal("nil returned")
 	}
 }

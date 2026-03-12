@@ -263,7 +263,7 @@ final class TcpReactorPool {
       Session(XorStream xor, byte[] initialClientData, boolean initialClientDataDecrypted) {
         this.xor = xor;
         if (initialClientData != null && initialClientData.length > 0) {
-          if (!initialClientDataDecrypted) {
+          if (!initialClientDataDecrypted && xor != null) {
             xor.decode(initialClientData, 0, initialClientData.length);
           }
           toRemote.add(ByteBuffer.wrap(initialClientData));
@@ -350,7 +350,9 @@ final class TcpReactorPool {
           buffer.flip();
           byte[] data = new byte[n];
           buffer.get(data);
-          xor.decode(data, 0, n);
+          if (xor != null) {
+            xor.decode(data, 0, n);
+          }
           toRemote.add(ByteBuffer.wrap(data));
           pendingToRemoteBytes += n;
           if (pendingToRemoteBytes >= MAX_PENDING_BYTES) {
@@ -383,7 +385,9 @@ final class TcpReactorPool {
           buffer.flip();
           byte[] data = new byte[n];
           buffer.get(data);
-          xor.encode(data, 0, n);
+          if (xor != null) {
+            xor.encode(data, 0, n);
+          }
           toClient.add(ByteBuffer.wrap(data));
           pendingToClientBytes += n;
           if (pendingToClientBytes >= MAX_PENDING_BYTES) {

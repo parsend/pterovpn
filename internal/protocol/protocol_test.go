@@ -256,6 +256,25 @@ func TestWriteHandshakeWithOpts(t *testing.T) {
 	}
 }
 
+func TestWriteHandshakeSupportsTransportFieldsInOpts(t *testing.T) {
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
+	opts := []byte(`{"transport":"tls","tlsName":"vpn.example.com","padS4":24}`)
+	if err := WriteHandshakeWithPrefixAndOpts(w, RoleTCP(), 0, "x", 0, opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	hs, err := ReadHandshake(bufio.NewReader(&buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hs.Token != "x" || hs.Role != RoleTCP() {
+		t.Errorf("got %+v", hs)
+	}
+}
+
 func TestBufSizeForConn(t *testing.T) {
 	s := BufSizeForConn(0)
 	if s < 4*1024 || s > 16*1024 {

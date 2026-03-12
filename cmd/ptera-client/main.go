@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/netcfg"
@@ -17,6 +18,8 @@ var version = "dev"
 type runOpts struct {
 	serverIP     net.IP
 	token        string
+	transport    string
+	tlsName      string
 	tunName      string
 	tunCIDR      string
 	tunCIDR6     string
@@ -42,6 +45,8 @@ func run() error {
 		server      = flag.String("server", "", "host:port or host")
 		ports       = flag.String("ports", "", "csv ports for multiport")
 		token       = flag.String("token", "", "token")
+		transport   = flag.String("transport", "xor", "transport: xor or tls")
+		tlsName     = flag.String("tls-name", "", "SNI name for tls transport")
 		tunName     = flag.String("tun", "ptera0", "tun name")
 		tunCIDR     = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
 		tunCIDR6    = flag.String("tun-cidr6", "", "ipv6 tun cidr (e.g. fd00:13:37::2/64)")
@@ -94,6 +99,8 @@ func run() error {
 	opts := runOpts{
 		serverIP:     sip,
 		token:        *token,
+		transport:    resolveClientTransport(*transport),
+		tlsName:      strings.TrimSpace(*tlsName),
 		tunName:      *tunName,
 		tunCIDR:      *tunCIDR,
 		tunCIDR6:     *tunCIDR6,
@@ -101,9 +108,18 @@ func run() error {
 		routeCIDRs:   routeCIDRs,
 		excludeCIDRs: excludeCIDRs,
 		protection:   &prot,
-		proxy:       *proxy,
-		proxyListen: *proxyListen,
-		systemProxy: *systemProxy,
+		proxy:        *proxy,
+		proxyListen:  *proxyListen,
+		systemProxy:  *systemProxy,
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
+}
+
+func resolveClientTransport(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "tls":
+		return "tls"
+	default:
+		return "xor"
+	}
 }

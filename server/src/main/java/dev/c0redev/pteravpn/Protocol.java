@@ -205,23 +205,54 @@ final class Protocol {
   record TcpConnect(byte addrType, InetAddress ip, int port) {}
   record UdpFrame(byte addrType, int srcPort, InetAddress dst, int dstPort, byte[] payload) {}
 
-  record ClientOptions(int padS4) {
+  record ClientOptions(int padS4, String transport, String tlsName) {
     static Optional<ClientOptions> parse(String json) {
       try {
         int padS4 = 32;
-        if (json.contains("\"padS4\"")) {
-          int i = json.indexOf("\"padS4\"");
-          int start = json.indexOf(":", i) + 1;
-          int end = json.indexOf(",", start);
-          if (end < 0) end = json.indexOf("}", start);
-          if (end < 0) end = json.length();
-          padS4 = Integer.parseInt(json.substring(start, end).trim());
-          if (padS4 < 0 || padS4 > 64) padS4 = 32;
+        Integer parsedPad = parseIntField(json, "padS4");
+        if (parsedPad != null && parsedPad >= 0 && parsedPad <= 64) {
+          padS4 = parsedPad;
         }
-        return Optional.of(new ClientOptions(padS4));
+        String transport = normalizeTransport(parseStringField(json, "transport"));
+        String tlsName = parseStringField(json, "tlsName");
+        return Optional.of(new ClientOptions(padS4, transport, tlsName == null ? "" : tlsName.trim()));
       } catch (Exception e) {
         return Optional.empty();
       }
     }
+  }
+
+  private static String normalizeTransport(String transport) {
+    if (transport == null) return "xor";
+    return "tls".equalsIgnoreCase(transport.trim()) ? "tls" : "xor";
+  }
+
+  private static String parseStringField(String json, String key) {
+    int keyIndex = json.indexOf("\"" + key + "\"");
+    if (keyIndex < 0) return "";
+    int colon = json.indexOf(":", keyIndex);
+    if (colon < 0) return "";
+    int start = json.indexOf("\"", colon + 1);
+    if (start < 0) return "";
+    int end = json.indexOf("\"", start + 1);
+    if (end < 0) return "";
+    return json.substring(start + 1, end).trim();
+  }
+
+  private static Integer parseIntField(String json, String key) {
+    int keyIndex = json.indexOf("\"" + key + "\"");
+    if (keyIndex < 0) return null;
+    int colon = json.indexOf(":", keyIndex);
+    if (colon < 0) return null;
+    int start = colon + 1;
+    while (start < json.length() && Character.isWhitespace(json.charAt(start))) {
+      start++;
+    }
+    int end = start;
+    while (end < json.length() && Character.isDigit(json.charAt(end))) {
+      end++;
+    }
+    if (start >= end) return null;
+    return Integer.parseInt(json.substring(start, end));
   }
 }

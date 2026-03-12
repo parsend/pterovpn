@@ -13,6 +13,8 @@ type Config struct {
 	Routes     string             `json:"routes,omitempty"`
 	Exclude    string             `json:"exclude,omitempty"`
 	TunCIDR6   string             `json:"tunCIDR6,omitempty"`
+	Transport  string             `json:"transport,omitempty"`
+	TLSName    string             `json:"tlsName,omitempty"`
 	Protection *ProtectionOptions `json:"protection,omitempty"`
 }
 
@@ -26,9 +28,11 @@ type ProtectionOptions struct {
 	PadS3       int    `json:"padS3,omitempty"`
 	PadS4       int    `json:"padS4,omitempty"`
 	PreCheck    bool   `json:"preCheck,omitempty"`
-	MagicSplit  string `json:"magicSplit,omitempty"`   // "2,3" etc, sum=5
-	JunkStyle   string `json:"junkStyle,omitempty"`    // "random"|"tls"
-	FlushPolicy string `json:"flushPolicy,omitempty"`  // "once"|"perChunk"
+	MagicSplit  string `json:"magicSplit,omitempty"`  
+	JunkStyle   string `json:"junkStyle,omitempty"`   
+	FlushPolicy string `json:"flushPolicy,omitempty"` 
+	Transport   string `json:"transport,omitempty"`   
+	TLSName     string `json:"tlsName,omitempty"`
 }
 
 func Dir() (string, error) {
