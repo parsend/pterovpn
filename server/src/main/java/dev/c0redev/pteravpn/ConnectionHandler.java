@@ -1,10 +1,12 @@
 package dev.c0redev.pteravpn;
 
+import java.io.ByteArrayInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.BufferedInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.SequenceInputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 import java.net.Socket;
@@ -27,7 +29,7 @@ final class ConnectionHandler implements Runnable {
     private static final Logger log = Log.logger(ConnectionHandler.class);
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     private static volatile SSLContext tlsContext;
-    private static final String TLS_PASSWORD = "changeit";
+    private static final String TLS_PASSWORD = "changeit"; //<-- real change this
 
     private final Socket sock;
     private final Config cfg;
@@ -52,7 +54,8 @@ final class ConnectionHandler implements Runnable {
             var xor = new XorStream(XorStream.keyFromToken(cfg.token()));
             s.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             rawOut = s.getOutputStream();
-            InputStream in = xor.wrapInput(new BufferedInputStream(s.getInputStream()));
+            BufferedInputStream rawBuf = new BufferedInputStream(s.getInputStream());
+            InputStream in = xor.wrapInput(rawBuf);
             OutputStream out = xor.wrapOutput(rawOut);
 
             Protocol.HandshakeResult hr = Protocol.readHandshake(in);
@@ -72,7 +75,12 @@ final class ConnectionHandler implements Runnable {
                 throw new IOException("bad token");
             }
             if (useTls) {
-                SSLSocket tlsSocket = upgradeToTls(s, tlsName);
+                int avail = rawBuf.available();
+                byte[] leftover = avail > 0 ? rawBuf.readNBytes(avail) : new byte[0];
+                Socket streamSocket = leftover.length > 0
+                    ? new SocketWithStream(s, new SequenceInputStream(new ByteArrayInputStream(leftover), s.getInputStream()))
+                    : s;
+                SSLSocket tlsSocket = upgradeToTls(streamSocket, tlsName);
                 s = tlsSocket;
                 in = tlsSocket.getInputStream();
                 out = tlsSocket.getOutputStream();
@@ -241,6 +249,53 @@ final class ConnectionHandler implements Runnable {
             s.close();
         } catch (IOException ignored) {
         }
+    }
+
+    private static final class SocketWithStream extends Socket {
+        private final Socket delegate;
+        private final InputStream customIn;
+
+        SocketWithStream(Socket delegate, InputStream customIn) throws IOException {
+            super();
+            this.delegate = delegate;
+            this.customIn = customIn;
+        }
+
+        @Override
+        public InputStream getInputStream() {
+            return customIn;
+        }
+
+        @Override
+        public OutputStream getOutputStream() throws IOException {
+            return delegate.getOutputStream();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
+
+        @Override
+        public int getPort() { return delegate.getPort(); }
+
+        @Override
+        public java.net.InetAddress getInetAddress() { return delegate.getInetAddress(); }
+
+        @Override
+        public int getLocalPort() { return delegate.getLocalPort(); }
+
+        @Override
+        public java.net.InetAddress getLocalAddress() { return delegate.getLocalAddress(); }
+
+        @Override
+        public java.net.SocketAddress getRemoteSocketAddress() { return delegate.getRemoteSocketAddress(); }
+
+        @Override
+        public boolean isClosed() { return delegate.isClosed(); }
+
+        @Override
+        public boolean isConnected() { return delegate.isConnected(); }
     }
 
     private static SSLSocket upgradeToTls(Socket raw, String tlsName) throws IOException {
