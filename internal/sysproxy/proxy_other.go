@@ -1,4 +1,7 @@
 
+//go:build !windows
+// +build !windows
+
 package sysproxy
 
 func Set(_ string) error {
