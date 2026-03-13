@@ -5,19 +5,19 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/parsend/pterovpn/internal/transport"
 )
 
-func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions) (net.Conn, error) {
+func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, transportName string, prot *config.ProtectionOptions) (net.Conn, error) {
 	addr := pickAddr(serverAddrs, targetIP, targetPort)
-	c, err := dialServer(addr, token)
+	res, err := transport.Dial(addr, token, transportName)
 	if err != nil {
 		return nil, err
 	}
+	c := res.Conn
 	slot := protocol.TimeSlot()
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(c, bufSize)
@@ -85,18 +85,6 @@ type tunnelConn struct {
 
 func (c *tunnelConn) Read(p []byte) (n int, err error) {
 	return c.r.Read(p)
-}
-
-func dialServer(addr, token string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	c, err := d.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-	}
-	return obfuscate.WrapConn(c, token), nil
 }
 
 func pickAddr(addrs []string, ip net.IP, port uint16) string {

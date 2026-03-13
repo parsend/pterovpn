@@ -20,6 +20,7 @@ import (
 	"github.com/parsend/pterovpn/internal/geo"
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/probe"
+	"github.com/parsend/pterovpn/internal/transport"
 	"github.com/parsend/pterovpn/internal/update"
 )
 
@@ -357,7 +358,7 @@ func (m *Model) refreshCloudItems() {
 }
 
 func newAddInputs() []textinput.Model {
-	return newInputsWithValues("", "", "", "", "")
+	return newInputsWithValues("", "", "", "", "", transport.NameXOR)
 }
 
 func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
@@ -505,7 +506,7 @@ func fillConnectionFromAnyField(inputs []textinput.Model) []textinput.Model {
 	return inputs
 }
 
-func newInputsWithValues(name, connection, routes, exclude, tunCIDR6 string) []textinput.Model {
+func newInputsWithValues(name, connection, routes, exclude, tunCIDR6, transportName string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
 		t.Placeholder = pl
@@ -518,6 +519,7 @@ func newInputsWithValues(name, connection, routes, exclude, tunCIDR6 string) []t
 		ti("routes (пусто=all)", routes),
 		ti("exclude", exclude),
 		ti("tun-cidr6 (fd00:.../64)", tunCIDR6),
+		ti("transport (xor|mtls)", transport.Normalize(transportName)),
 	}
 }
 
@@ -608,9 +610,9 @@ func runPing(addr, name string) tea.Cmd {
 	}
 }
 
-func runProbePterovpn(addr, name string) tea.Cmd {
+func runProbePterovpn(cfg config.Config, name string) tea.Cmd {
 	return func() tea.Msg {
-		ok, ipv6, err := probe.ProbePterovpn(addr, probeTimeout)
+		ok, ipv6, err := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
 		if err != nil {
 			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false}
 		}
@@ -635,7 +637,7 @@ func runProbeAll(cfgs []config.Config, names []string) tea.Cmd {
 	}
 	cmds := make([]tea.Cmd, len(cfgs))
 	for i := range cfgs {
-		cmds[i] = runProbePterovpn(cfgs[i].Server, names[i])
+		cmds[i] = runProbePterovpn(cfgs[i], names[i])
 	}
 	return tea.Batch(cmds...)
 }
@@ -724,13 +726,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					idx = 0
 				}
 				if idx < len(m.cfgs) {
-					return m, runProbePterovpn(m.cfgs[idx].Server, m.names[idx])
+					return m, runProbePterovpn(m.cfgs[idx], m.names[idx])
 				}
 			}
 			if m.tab == tabCloud && !m.cloudLoading && len(m.cloudCfgs) > 0 {
 				idx := m.cloudList.Index()
 				if idx >= 0 && idx < len(m.cloudCfgs) {
-					return m, runProbePterovpn(m.cloudCfgs[idx].Server, m.cloudNames[idx])
+					return m, runProbePterovpn(m.cloudCfgs[idx], m.cloudNames[idx])
 				}
 			}
 		case "r", "R":
@@ -742,6 +744,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				idx := m.cfgList.Index()
 				if idx >= 0 && idx < len(m.names) {
 					m.deletingCfg = m.names[idx]
+				}
+				return m, nil
+			}
+		case "m", "M":
+			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
+				idx := m.cfgList.Index()
+				if idx >= 0 && idx < len(m.cfgs) {
+					cfg := m.cfgs[idx]
+					if transport.Normalize(cfg.Transport) == transport.NameMTLS {
+						cfg.Transport = transport.NameXOR
+					} else {
+						cfg.Transport = transport.NameMTLS
+					}
+					if err := config.Save(m.names[idx], cfg); err != nil {
+						m.err = err.Error()
+					} else {
+						m.err = ""
+						m.reloadCfgs()
+					}
 				}
 				return m, nil
 			}
@@ -770,7 +791,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editing = true
 					m.editingName = m.cloudNames[idx]
 					cfg := m.cloudCfgs[idx]
-					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
+					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6, cfg.Transport)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -799,7 +820,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editing = true
 					m.editingName = m.names[idx]
 					cfg := m.cfgs[idx]
-					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
+					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6, cfg.Transport)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -989,6 +1010,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Routes:   strings.TrimSpace(m.editInputs[2].Value()),
 							Exclude:  strings.TrimSpace(m.editInputs[3].Value()),
 							TunCIDR6: strings.TrimSpace(m.editInputs[4].Value()),
+							Transport: transport.Normalize(strings.TrimSpace(m.editInputs[5].Value())),
 						}
 						if newName != oldName {
 							_ = config.Delete(oldName)
@@ -1031,6 +1053,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Routes:   strings.TrimSpace(m.addInputs[2].Value()),
 						Exclude:  strings.TrimSpace(m.addInputs[3].Value()),
 						TunCIDR6: strings.TrimSpace(m.addInputs[4].Value()),
+						Transport: transport.Normalize(strings.TrimSpace(m.addInputs[5].Value())),
 					}); err != nil {
 						m.err = err.Error()
 					} else {
@@ -1457,7 +1480,7 @@ func (m Model) View() string {
 			content.WriteString("Удалить конфигурацию \"" + m.deletingCfg + "\"? y/n")
 		} else if m.editing {
 			content.WriteString("Редактирование: " + m.editingName + "\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:", "Transport (xor|mtls):"}
 			for i := range m.editInputs {
 				content.WriteString(labels[i] + " ")
 				content.WriteString(m.editInputs[i].View())
@@ -1470,7 +1493,7 @@ func (m Model) View() string {
 			}
 		} else if m.adding {
 			content.WriteString("Новая конфигурация\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:", "Transport (xor|mtls):"}
 			for i := range m.addInputs {
 				content.WriteString(labels[i] + " ")
 				content.WriteString(m.addInputs[i].View())
@@ -1486,6 +1509,7 @@ func (m Model) View() string {
 			idx := m.cfgList.Index()
 			if idx >= 0 && idx < len(m.cfgs) {
 				name := m.names[idx]
+				cfg := m.cfgs[idx]
 				ipv6Ok := m.cfgIPv6 != nil && m.cfgIPv6[name]
 				_, probed := m.pterovpnRes[name]
 				var ipv6Str string
@@ -1498,13 +1522,14 @@ func (m Model) View() string {
 				} else {
 					ipv6Str = "IPv6: —"
 				}
-				content.WriteString(cloudDetailStyle.Render(ipv6Str))
+				tr := transport.Normalize(cfg.Transport)
+				content.WriteString(cloudDetailStyle.Render(ipv6Str + "  Transport: " + tr))
 			}
 		}
 	case tabCloud:
 		if m.editing {
 			content.WriteString("Редактирование (cloud): " + m.editingName + "\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
+			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:", "Transport (xor|mtls):"}
 			for i := range m.editInputs {
 				content.WriteString(labels[i] + " ")
 				content.WriteString(m.editInputs[i].View())
@@ -1655,7 +1680,7 @@ func (m Model) View() string {
 	b.WriteString("\n\n")
 	footer := "Tab/Shift+Tab или ←/→ - вкладки  q/Esc - выход  Enter - подключиться/отключиться"
 	if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" {
-		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  D - удалить"
+		footer += "  ↑/↓ - выбор  N - добавить  P - ping  T - pterovpn  E - ред.  M - transport  D - удалить"
 	}
 	if m.tab == tabCloud && !m.cloudLoading {
 		footer += "  ↑/↓ - выбор  P - ping  T - pterovpn  E - ред. (IPv6)  R - обновить"

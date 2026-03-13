@@ -12,7 +12,7 @@ import (
 	"github.com/parsend/pterovpn/internal/tunnel"
 )
 
-func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions) error {
+func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, transportName string, prot *config.ProtectionOptions) error {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
@@ -34,11 +34,11 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 			clientlog.Err("proxy: accept: %v", err)
 			continue
 		}
-		go handleSOCKS5(conn, serverAddrs, token, prot)
+		go handleSOCKS5(conn, serverAddrs, token, transportName, prot)
 	}
 }
 
-func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *config.ProtectionOptions) {
+func handleSOCKS5(client net.Conn, serverAddrs []string, token string, transportName string, prot *config.ProtectionOptions) {
 	defer client.Close()
 
 	buf := make([]byte, 257)
@@ -118,7 +118,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 		}
 	}
 
-	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot)
+	remote, err := tunnel.Dial(serverAddrs, ip, port, token, transportName, prot)
 	if err != nil {
 		clientlog.DPI("proxy: tunnel %s:%d: %v", host, port, err)
 		reply(client, 1)

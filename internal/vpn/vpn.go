@@ -16,8 +16,8 @@ import (
 
 	"github.com/parsend/pterovpn/internal/clientlog"
 	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/obfuscate"
 	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/parsend/pterovpn/internal/transport"
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -30,6 +30,7 @@ type Options struct {
 	TunFD       int
 	MTU         int
 	Token       string
+	Transport   string
 	ServerAddrs []string
 	Ready       func()
 	Device      device.Device
@@ -43,7 +44,7 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	clientlog.Info("vpn: starting, servers=%v", opt.ServerAddrs)
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, opt.Transport, 4, opt.Protection)
 	if err != nil {
 		return err
 	}
@@ -105,13 +106,13 @@ type udpMux struct {
 	assoc map[udpAssocKey]*udpAssoc
 }
 
-func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
+func newUDPMux(addrs []string, token string, transportName string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot)
+		c, err := newUDPChan(byte(i), addrs, token, transportName, m.dispatch, prot)
 		if err != nil {
 			clientlog.Drop("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
@@ -180,16 +181,17 @@ type udpChan struct {
 	cb     func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, transportName string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
 		a := addrs[(start+i)%len(addrs)]
-		c, err := dialTCP(a, token)
+		res, err := transport.Dial(a, token, transportName)
 		if err != nil {
 			last = err
 			continue
 		}
+		c := res.Conn
 		maxPad := 32
 		if prot != nil && prot.PadS4 > 0 && prot.PadS4 <= 64 {
 			maxPad = prot.PadS4
@@ -417,10 +419,11 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 }
 
 func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16, slot int64) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
-	sconn, err := dialTCP(addr, h.opt.Token)
+	res, err := transport.Dial(addr, h.opt.Token, h.opt.Transport)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	sconn := res.Conn
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(sconn, bufSize)
 	w := bufio.NewWriterSize(sconn, bufSize)
@@ -471,18 +474,6 @@ func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16,
 		return sconn, nil, nil, err
 	}
 	return sconn, r, w, nil
-}
-
-func dialTCP(addr string, token string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	c, err := d.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetNoDelay(true)
-	}
-	return obfuscate.WrapConn(c, token), nil
 }
 
 func (h *handler) isServerAddr(dstIP net.IP, dstPort uint16) bool {

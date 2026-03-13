@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/parsend/pterovpn/internal/config"
 	"github.com/parsend/pterovpn/internal/netcfg"
+	"github.com/parsend/pterovpn/internal/transport"
 )
 
 var version = "dev"
@@ -17,6 +19,7 @@ var version = "dev"
 type runOpts struct {
 	serverIP     net.IP
 	token        string
+	transport    string
 	tunName      string
 	tunCIDR      string
 	tunCIDR6     string
@@ -42,6 +45,7 @@ func run() error {
 		server      = flag.String("server", "", "host:port or host")
 		ports       = flag.String("ports", "", "csv ports for multiport")
 		token       = flag.String("token", "", "token")
+		transportV  = flag.String("transport", "xor", "transport: xor or mtls")
 		tunName     = flag.String("tun", "ptera0", "tun name")
 		tunCIDR     = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
 		tunCIDR6    = flag.String("tun-cidr6", "", "ipv6 tun cidr (e.g. fd00:13:37::2/64)")
@@ -94,6 +98,7 @@ func run() error {
 	opts := runOpts{
 		serverIP:     sip,
 		token:        *token,
+		transport:    transport.Normalize(strings.TrimSpace(*transportV)),
 		tunName:      *tunName,
 		tunCIDR:      *tunCIDR,
 		tunCIDR6:     *tunCIDR6,

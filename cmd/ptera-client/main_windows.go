@@ -80,12 +80,13 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
-			Device:      dev,
-			MTU:         opts.mtu,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			Device:       dev,
+			MTU:          opts.mtu,
+			Token:        opts.token,
+			Transport:    opts.transport,
+			ServerAddrs:  addrs,
+			Ready:        func() { close(ready) },
+			Protection:   opts.protection,
 		})
 	}()
 
@@ -172,7 +173,7 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 	if onReady != nil {
 		onReady()
 	}
-	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.transport, opts.protection)
 }
 
 func parseCIDR(cidr string) (ip, mask string, err error) {

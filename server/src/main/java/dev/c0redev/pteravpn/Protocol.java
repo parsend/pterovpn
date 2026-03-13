@@ -10,10 +10,15 @@ import java.security.SecureRandom;
 import java.util.Optional;
 
 final class Protocol {
+  static final byte[] TRANSPORT_MAGIC = "PTTR".getBytes(StandardCharsets.UTF_8);
+  static final byte TRANSPORT_VERSION = 1;
+  static final byte TRANSPORT_XOR = 1;
+  static final byte TRANSPORT_MTLS = 2;
   static final byte[] MAGIC = "PTVPN".getBytes(StandardCharsets.UTF_8);
   static final byte VERSION = 1;
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
+  static final byte ROLE_BOOTSTRAP = 3;
   static final byte MSG_UDP = 1;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
@@ -25,6 +30,19 @@ final class Protocol {
 
   static record HandshakeResult(Handshake handshake, Optional<ClientOptions> opts) {}
 
+  static String readTransportPreface(InputStream in) throws IOException {
+    byte[] buf = readN(in, TRANSPORT_MAGIC.length + 2);
+    for (int i = 0; i < TRANSPORT_MAGIC.length; i++) {
+      if (buf[i] != TRANSPORT_MAGIC[i]) throw new IOException("bad transport preface");
+    }
+    if (buf[TRANSPORT_MAGIC.length] != TRANSPORT_VERSION) throw new IOException("bad transport version");
+    return switch (buf[TRANSPORT_MAGIC.length + 1]) {
+      case TRANSPORT_XOR -> "xor";
+      case TRANSPORT_MTLS -> "mtls";
+      default -> throw new IOException("bad transport id");
+    };
+  }
+
   static HandshakeResult readHandshake(InputStream in) throws IOException {
     skipUntilMagic(in);
     Handshake hs = readHandshakeBody(in);
@@ -33,24 +51,17 @@ final class Protocol {
   }
 
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
-    if (!in.markSupported()) return Optional.empty();
-    if (in.available() < 2) return Optional.empty();
-    in.mark(MAX_OPTS + 4);
-    int optsLen = readU16(in);
-    if (optsLen <= 0 || optsLen > MAX_OPTS) {
-      in.reset();
+    int optsLen;
+    try {
+      optsLen = readU16(in);
+    } catch (EOFException e) {
       return Optional.empty();
     }
-    if (in.available() < optsLen) {
-      in.reset();
-      return Optional.empty();
-    }
+    if (optsLen <= 0) return Optional.empty();
+    if (optsLen > MAX_OPTS) throw new IOException("bad opts len");
     byte[] buf = readN(in, optsLen);
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
-    if (parsed.isEmpty()) {
-      in.reset();
-      return Optional.empty();
-    }
+    if (parsed.isEmpty()) return Optional.empty();
     return parsed;
   }
 

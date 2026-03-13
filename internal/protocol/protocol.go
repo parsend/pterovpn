@@ -23,8 +23,9 @@ var magic = []byte{'P', 'T', 'V', 'P', 'N'}
 const (
 	version = 1
 
-	roleUDP = 1
-	roleTCP = 2
+	roleUDP       = 1
+	roleTCP       = 2
+	roleBootstrap = 3
 
 	msgUDP = 1
 
@@ -280,11 +281,15 @@ func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID b
 			return err
 		}
 	}
-	if len(optsJSON) > 0 && len(optsJSON) <= maxOptsLen {
-		if err := writeU16(w, uint16(len(optsJSON))); err != nil {
-			return err
-		}
-		if _, err := w.Write(optsJSON); err != nil {
+	optsLen := len(optsJSON)
+	if optsLen > maxOptsLen {
+		optsLen = 0
+	}
+	if err := writeU16(w, uint16(optsLen)); err != nil {
+		return err
+	}
+	if optsLen > 0 {
+		if _, err := w.Write(optsJSON[:optsLen]); err != nil {
 			return err
 		}
 	}
@@ -500,6 +505,7 @@ func randPadLenN(m int) int {
 
 func RoleUDP() byte { return roleUDP }
 func RoleTCP() byte { return roleTCP }
+func RoleBootstrap() byte { return roleBootstrap }
 
 func normalizeIP(ip net.IP) (byte, []byte, error) {
 	if v4 := ip.To4(); v4 != nil {

@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Properties;
 
 final class Config {
+  private final Path baseDir;
   private final List<Integer> listenPorts;
   private final String token;
   private final int udpChannels;
@@ -19,8 +20,9 @@ final class Config {
   private final int updateCheckIntervalMinutes;
   private final int updateRestartExitCode;
 
-  private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug,
+  private Config(Path baseDir, List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug,
                  boolean updateEnabled, String updateRepo, int updateCheckIntervalMinutes, int updateRestartExitCode) {
+    this.baseDir = baseDir;
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
@@ -57,6 +59,10 @@ final class Config {
     return publicHost;
   }
 
+  Path baseDir() {
+    return baseDir;
+  }
+
   static Config load(Path configPath) throws IOException {
     Properties p = new Properties();
     try (InputStream in = Files.newInputStream(configPath)) {
@@ -81,7 +87,9 @@ final class Config {
     String updateRepo = firstNonEmpty(p.getProperty("update.repo"), "parsend/pterovpn");
     int updateCheckIntervalMinutes = Math.max(15, parseInt(p.getProperty("update.checkIntervalMinutes"), 60));
     int updateRestartExitCode = parseInt(p.getProperty("update.restartExitCode"), 1);
-    return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug,
+    Path baseDir = configPath.toAbsolutePath().normalize().getParent();
+    if (baseDir == null) baseDir = Path.of(".").toAbsolutePath().normalize();
+    return new Config(baseDir, ports, token, udpChannels, publicHost != null ? publicHost : "", debug,
         updateEnabled, updateRepo, updateCheckIntervalMinutes, updateRestartExitCode);
   }
 

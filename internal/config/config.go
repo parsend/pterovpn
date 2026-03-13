@@ -13,6 +13,7 @@ type Config struct {
 	Routes     string             `json:"routes,omitempty"`
 	Exclude    string             `json:"exclude,omitempty"`
 	TunCIDR6   string             `json:"tunCIDR6,omitempty"`
+	Transport  string             `json:"transport,omitempty"`
 	Protection *ProtectionOptions `json:"protection,omitempty"`
 }
 
@@ -78,6 +79,9 @@ func Load(path string) (Config, error) {
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, err
+	}
+	if c.Transport != "mtls" {
+		c.Transport = "xor"
 	}
 	return c, nil
 }

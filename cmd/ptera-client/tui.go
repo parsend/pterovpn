@@ -18,6 +18,7 @@ import (
 	"github.com/parsend/pterovpn/internal/metrics"
 	"github.com/parsend/pterovpn/internal/netcfg"
 	"github.com/parsend/pterovpn/internal/probe"
+	"github.com/parsend/pterovpn/internal/transport"
 	"github.com/parsend/pterovpn/internal/tui"
 )
 
@@ -107,7 +108,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	start := time.Now()
 	dnsOK := checkDNS()
 	rttBefore, _ := probe.Ping(cfg.Server, probeTimeout)
-	probeOK, _, _ := probe.ProbePterovpn(cfg.Server, probeTimeout)
+	probeOK, _, _ := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
 
 	record := metrics.SessionRecord{
 		Start:          start,
@@ -171,7 +172,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		prot = &p
 	}
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
-		ok, _, err := probe.ProbePterovpn(addrs[0], probeTimeout)
+		ok, _, err := probe.ProbePterovpnTransport(addrs[0], cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
 		if err != nil || !ok {
 			record.ErrorType = "preCheck"
 			record.End = time.Now()
@@ -189,6 +190,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	opts := runOpts{
 		serverIP:     sip,
 		token:        cfg.Token,
+		transport:    transport.Normalize(cfg.Transport),
 		tunName:      "ptera0",
 		tunCIDR:      "10.13.37.2/24",
 		tunCIDR6:     tunCIDR6,

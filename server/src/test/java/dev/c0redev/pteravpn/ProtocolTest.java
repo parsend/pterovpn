@@ -20,6 +20,32 @@ class ProtocolTest {
   }
 
   @Test
+  void readTransportPrefaceXor() throws IOException {
+    byte[] buf = new byte[]{
+        'P', 'T', 'T', 'R',
+        Protocol.TRANSPORT_VERSION,
+        Protocol.TRANSPORT_XOR
+    };
+    assertEquals("xor", Protocol.readTransportPreface(new ByteArrayInputStream(buf)));
+  }
+
+  @Test
+  void readTransportPrefaceMtls() throws IOException {
+    byte[] buf = new byte[]{
+        'P', 'T', 'T', 'R',
+        Protocol.TRANSPORT_VERSION,
+        Protocol.TRANSPORT_MTLS
+    };
+    assertEquals("mtls", Protocol.readTransportPreface(new ByteArrayInputStream(buf)));
+  }
+
+  @Test
+  void readTransportPrefaceBadMagic() {
+    byte[] buf = new byte[]{'B', 'A', 'D', '!', 1, 1};
+    assertThrows(IOException.class, () -> Protocol.readTransportPreface(new ByteArrayInputStream(buf)));
+  }
+
+  @Test
   void readHandshakeTcp() throws IOException {
     byte[] tok = "secret".getBytes();
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
@@ -28,6 +54,7 @@ class ProtocolTest {
     buf.write(Protocol.ROLE_TCP);
     buf.write(u16(tok.length));
     buf.write(tok);
+    buf.write(u16(0));
     var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
     var hs = hr.handshake();
     assertEquals(Protocol.ROLE_TCP, hs.role());
@@ -45,6 +72,7 @@ class ProtocolTest {
     buf.write(u16(tok.length));
     buf.write(tok);
     buf.write(3);
+    buf.write(u16(0));
     var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
     var hs = hr.handshake();
     assertEquals(Protocol.ROLE_UDP, hs.role());

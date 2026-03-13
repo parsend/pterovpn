@@ -31,7 +31,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if onReady != nil {
 			onReady()
 		}
-		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.transport, opts.protection)
 	}
 	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -91,10 +91,11 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
 			CreateDevice: createDevice,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			Token:        opts.token,
+			Transport:    opts.transport,
+			ServerAddrs:  addrs,
+			Ready:        func() { close(ready) },
+			Protection:   opts.protection,
 		})
 	}()
 
