@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Optional;
@@ -106,6 +107,64 @@ final class Protocol {
     InetAddress ip = readAddr(in, (byte) at);
     int port = readU16(in);
     return new TcpConnect((byte) at, ip, port);
+  }
+
+  /** Returns handshake + opts if buffer has full handshake; null if need more. Advances buf on success. */
+    static HandshakeResult tryReadHandshake(ByteBuffer buf) {
+    if (buf.remaining() < MAGIC_LEN) return null;
+    ByteBuffer d = buf.duplicate();
+    while (d.remaining() >= MAGIC_LEN) {
+      int p = d.position();
+      boolean match = true;
+      for (int i = 0; i < MAGIC_LEN; i++) {
+        if (d.get(p + i) != MAGIC[i]) { match = false; break; }
+      }
+      if (!match) { d.position(p + 1); continue; }
+      d.position(p + MAGIC_LEN);
+      if (d.remaining() < 4) return null;
+      int ver = d.get() & 0xff;
+      if (ver != VERSION) { d.position(p + 1); continue; }
+      byte role = d.get();
+      int tokenLen = (d.get() & 0xff) << 8 | (d.get() & 0xff);
+      if (tokenLen < 0 || tokenLen > MAX_TOKEN) return null;
+      if (d.remaining() < tokenLen) return null;
+      byte[] tokenBytes = new byte[tokenLen];
+      d.get(tokenBytes);
+      String token = new String(tokenBytes, StandardCharsets.UTF_8);
+      int channelId = -1;
+      if (role == ROLE_UDP) {
+        if (d.remaining() < 1) return null;
+        channelId = d.get() & 0xff;
+      }
+      if (d.remaining() < 2) return null;
+      int optsLen = (d.get() & 0xff) << 8 | (d.get() & 0xff);
+      if (optsLen > MAX_OPTS) return null;
+      if (optsLen > 0 && d.remaining() < optsLen) return null;
+      if (optsLen > 0) d.position(d.position() + optsLen);
+      buf.position(d.position());
+      return new HandshakeResult(new Handshake(role, channelId, token), Optional.empty());
+    }
+    return null;
+  }
+
+  /** Returns TcpConnect if buffer has full message; null if need more. Advances buf on success. */
+  static TcpConnect tryReadTcpConnect(ByteBuffer buf) {
+    if (buf.remaining() < 7) return null;
+    ByteBuffer d = buf.duplicate();
+    byte at = d.get();
+    int ipLen = at == ADDR_V6 ? 16 : 4;
+    if (at != ADDR_V4 && at != ADDR_V6) return null;
+    if (d.remaining() < ipLen + 2) return null;
+    byte[] ipb = new byte[ipLen];
+    d.get(ipb);
+    int port = (d.get() & 0xff) << 8 | (d.get() & 0xff);
+    try {
+      InetAddress ip = InetAddress.getByAddress(ipb);
+      buf.position(d.position());
+      return new TcpConnect(at, ip, port);
+    } catch (Exception e) {
+      return null;
+    }
   }
 
   static UdpFrame readUdpFrame(InputStream in) throws IOException {

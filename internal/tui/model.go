@@ -612,7 +612,8 @@ func runPing(addr, name string) tea.Cmd {
 
 func runProbePterovpn(cfg config.Config, name string) tea.Cmd {
 	return func() tea.Msg {
-		ok, ipv6, err := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
+		tr := transport.Normalize(cfg.Transport)
+		ok, ipv6, err := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, tr, probeTimeout)
 		if err != nil {
 			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false}
 		}

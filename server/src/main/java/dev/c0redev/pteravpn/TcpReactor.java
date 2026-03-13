@@ -13,6 +13,8 @@ import java.util.Iterator;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongConsumer;
 import java.util.logging.Level;
@@ -43,14 +45,32 @@ final class TcpReactorPool {
         if (client == null) {
             throw new IOException("socket does not support channel");
         }
+        register(client, connect, xor, null, initialClientData, initialClientDataDecrypted);
+    }
+
+    void register(
+        SocketChannel client,
+        Protocol.TcpConnect connect,
+        XorStream xor,
+        TlsTunnel tls,
+        byte[] initialClientData,
+        boolean initialClientDataDecrypted
+    ) throws IOException {
         int idx = Math.floorMod(rr.getAndIncrement(), reactors.length);
         reactors[idx].register(
             client,
             connect,
             xor,
+            tls,
             initialClientData,
-            initialClientDataDecrypted
+            initialClientDataDecrypted,
+            null
         );
+    }
+
+    void registerMtlsPending(SocketChannel client, TlsTunnel tls, String expectedToken) throws IOException {
+        int idx = Math.floorMod(rr.getAndIncrement(), reactors.length);
+        reactors[idx].registerMtlsPending(client, tls, expectedToken);
     }
 
     void shutdown() {
@@ -83,8 +103,10 @@ final class TcpReactorPool {
             SocketChannel client,
             Protocol.TcpConnect connect,
             XorStream xor,
+            TlsTunnel tls,
             byte[] initialClientData,
-            boolean initialClientDataDecrypted
+            boolean initialClientDataDecrypted,
+            String expectedToken
         ) throws IOException {
             if (closed.get()) {
                 throw new IOException("reactor closed");
@@ -94,9 +116,21 @@ final class TcpReactorPool {
                     client,
                     connect,
                     xor,
+                    tls,
                     initialClientData,
-                    initialClientDataDecrypted
+                    initialClientDataDecrypted,
+                    expectedToken
                 )
+            );
+            selector.wakeup();
+        }
+
+        void registerMtlsPending(SocketChannel client, TlsTunnel tls, String expectedToken) throws IOException {
+            if (closed.get()) {
+                throw new IOException("reactor closed");
+            }
+            pending.add(
+                new Registration(client, null, null, tls, null, true, expectedToken)
             );
             selector.wakeup();
         }
@@ -132,8 +166,17 @@ final class TcpReactorPool {
             while (true) {
                 Registration reg = pending.poll();
                 if (reg == null) return;
-                closeChannel(reg.client());
+                if (reg.tls() != null) {
+                    reg.tls().close();
+                } else {
+                    closeChannel(reg.client());
+                }
             }
+        }
+
+        private void closeRegistration(Registration reg) {
+            if (reg.tls() != null) reg.tls().close();
+            else closeChannel(reg.client());
         }
 
         private void processSelectedKeys() {
@@ -143,7 +186,19 @@ final class TcpReactorPool {
                 it.remove();
                 if (!key.isValid()) continue;
 
-                if (!(key.attachment() instanceof Session session)) continue;
+                Object att = key.attachment();
+                if (att instanceof PendingMtlsSession pending) {
+                    try {
+                        int readyOps = key.readyOps();
+                        if ((readyOps & SelectionKey.OP_READ) != 0) pending.onReadable(key);
+                        if ((readyOps & SelectionKey.OP_WRITE) != 0) pending.onWritable(key);
+                    } catch (Exception e) {
+                        log.log(Level.WARNING, "mtls pending key error", e);
+                        pending.close("mtls pending error");
+                    }
+                    continue;
+                }
+                if (!(att instanceof Session session)) continue;
                 try {
                     int readyOps = key.readyOps();
                     if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
@@ -166,6 +221,31 @@ final class TcpReactorPool {
             while (true) {
                 Registration reg = pending.poll();
                 if (reg == null) return;
+                if (reg.expectedToken() != null) {
+                    try {
+                        SocketChannel client = reg.client();
+                        client.configureBlocking(false);
+                        client.setOption(StandardSocketOptions.TCP_NODELAY, true);
+                        client.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+                        PendingMtlsSession pendingSession = new PendingMtlsSession(
+                            selector, client, reg.tls(), reg.expectedToken(), this
+                        );
+                        int ops = SelectionKey.OP_READ;
+                        if (reg.tls().hasPendingOutput()) ops |= SelectionKey.OP_WRITE;
+                        SelectionKey key = client.register(selector, ops, pendingSession);
+                        pendingSession.setClientKey(key);
+                        try {
+                            pendingSession.onReadable(key);
+                        } catch (IOException e) {
+                            closeRegistration(reg);
+                            if (!closed.get()) log.warning("mtls pending first read failed: " + e.getMessage());
+                        }
+                    } catch (IOException e) {
+                        closeRegistration(reg);
+                        if (!closed.get()) log.warning("mtls pending register failed: " + e.getMessage());
+                    }
+                    continue;
+                }
                 SocketChannel remote = null;
                 try {
                     SocketChannel client = reg.client();
@@ -184,6 +264,7 @@ final class TcpReactorPool {
 
                     Session session = new Session(
                         reg.xor(),
+                        reg.tls(),
                         reg.initialClientData(),
                         reg.initialClientDataDecrypted()
                     );
@@ -247,13 +328,152 @@ final class TcpReactorPool {
             } catch (IOException ignored) {}
         }
 
+        void promoteToSession(
+            SocketChannel client,
+            SelectionKey clientKey,
+            TlsTunnel tls,
+            Protocol.TcpConnect connect,
+            byte[] initialClientData,
+            SocketChannel remote
+        ) throws IOException {
+            Session session = new Session(null, tls, initialClientData, true);
+            session.setClientKey(clientKey);
+            clientKey.attach(session);
+            boolean connected = !remote.isConnectionPending();
+            SelectionKey remoteKey = remote.register(
+                selector,
+                connected ? SelectionKey.OP_READ : SelectionKey.OP_CONNECT,
+                session
+            );
+            session.setRemoteKey(remoteKey);
+            session.setRemote(remote);
+            session.onConnected();
+        }
+
         private record Registration(
             SocketChannel client,
             Protocol.TcpConnect connect,
             XorStream xor,
+            TlsTunnel tls,
             byte[] initialClientData,
-            boolean initialClientDataDecrypted
+            boolean initialClientDataDecrypted,
+            String expectedToken
         ) {}
+
+        private final class PendingMtlsSession {
+
+            private static final int APP_BUF_SIZE = 64 * 1024;
+
+            private final Selector selector;
+            private final SocketChannel client;
+            private final TlsTunnel tls;
+            private final String expectedToken;
+            private final Reactor reactor;
+            private final ByteBuffer appBuffer = ByteBuffer.allocate(APP_BUF_SIZE);
+            private final ByteBuffer readBuf = ByteBuffer.allocate(BUFFER_SIZE);
+            private SelectionKey clientKey;
+            private boolean closed;
+
+            PendingMtlsSession(Selector selector, SocketChannel client, TlsTunnel tls, String expectedToken, Reactor reactor) {
+                this.selector = selector;
+                this.client = client;
+                this.tls = tls;
+                this.expectedToken = expectedToken;
+                this.reactor = reactor;
+            }
+
+            void setClientKey(SelectionKey key) {
+                this.clientKey = key;
+            }
+
+            void onReadable(SelectionKey key) throws IOException {
+                if (closed) return;
+                if (!tls.isHandshakeComplete()) {
+                    TlsTunnel.HandshakeStep step = tls.doHandshakeNonBlocking();
+                    if (step == TlsTunnel.HandshakeStep.NEED_WRITE) {
+                        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                        return;
+                    }
+                    if (step != TlsTunnel.HandshakeStep.DONE) return;
+                }
+                readBuf.clear();
+                int n = tls.read(readBuf);
+                if (n == -1) {
+                    close("client closed");
+                    return;
+                }
+                if (n == 0) return;
+                readBuf.flip();
+                if (appBuffer.remaining() < n) appBuffer.compact();
+                appBuffer.put(readBuf);
+                appBuffer.flip();
+                Protocol.HandshakeResult hr = Protocol.tryReadHandshake(appBuffer);
+                if (hr == null) {
+                    appBuffer.compact();
+                    return;
+                }
+                byte[] receivedTokenBytes = hr.handshake().token().getBytes(StandardCharsets.UTF_8);
+                byte[] expectedTokenBytes = expectedToken.getBytes(StandardCharsets.UTF_8);
+                if (!MessageDigest.isEqual(expectedTokenBytes, receivedTokenBytes)) {
+                    close("bad token");
+                    return;
+                }
+                if (hr.handshake().role() != Protocol.ROLE_TCP) {
+                    close("bad role");
+                    return;
+                }
+                Protocol.TcpConnect connect = Protocol.tryReadTcpConnect(appBuffer);
+                if (connect == null) {
+                    appBuffer.compact();
+                    return;
+                }
+                byte[] initialData = null;
+                if (appBuffer.hasRemaining()) {
+                    initialData = new byte[appBuffer.remaining()];
+                    appBuffer.get(initialData);
+                }
+                log.info("Accepted role=2 transport=mtls from " + client.getRemoteAddress());
+                log.info("TCP connect to " + connect.ip().getHostAddress() + ":" + connect.port());
+                SocketChannel remote = null;
+                try {
+                    remote = SocketChannel.open();
+                    remote.configureBlocking(false);
+                    remote.setOption(StandardSocketOptions.TCP_NODELAY, true);
+                    boolean connected = remote.connect(new InetSocketAddress(connect.ip(), connect.port()));
+                    closed = true;
+                    reactor.promoteToSession(client, key, tls, connect, initialData, remote);
+                } catch (IOException e) {
+                    closeChannel(remote);
+                    close("remote connect failed: " + e.getMessage());
+                }
+            }
+
+            void onWritable(SelectionKey key) throws IOException {
+                if (closed) return;
+                if (!tls.isHandshakeComplete()) {
+                    TlsTunnel.HandshakeStep step = tls.doHandshakeNonBlocking();
+                    if (step == TlsTunnel.HandshakeStep.NEED_READ) {
+                        key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                        return;
+                    }
+                    if (step == TlsTunnel.HandshakeStep.DONE) {
+                        key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                    }
+                    return;
+                }
+                if (tls.flushPending()) {
+                    key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                }
+            }
+
+            void close(String reason) {
+                if (closed) return;
+                closed = true;
+                log.fine("mtls pending close: " + reason);
+                if (clientKey != null) clientKey.cancel();
+                tls.close();
+            }
+        }
 
         private static final class Session {
 
@@ -265,6 +485,7 @@ final class TcpReactorPool {
             private final ArrayDeque<ByteBuffer> toClient = new ArrayDeque<>();
             private final ArrayDeque<ByteBuffer> toRemote = new ArrayDeque<>();
             private final XorStream xor;
+            private final TlsTunnel tls;
             private final AtomicBoolean closed = new AtomicBoolean(false);
 
             private SelectionKey clientKey;
@@ -279,12 +500,14 @@ final class TcpReactorPool {
 
             Session(
                 XorStream xor,
+                TlsTunnel tls,
                 byte[] initialClientData,
                 boolean initialClientDataDecrypted
             ) {
                 this.xor = xor;
+                this.tls = tls;
                 if (initialClientData != null && initialClientData.length > 0) {
-                    if (!initialClientDataDecrypted) {
+                    if (xor != null && !initialClientDataDecrypted) {
                         xor.decode(
                             initialClientData,
                             0,
@@ -367,8 +590,14 @@ final class TcpReactorPool {
                         );
                         return;
                     }
-                    SocketChannel client = (SocketChannel) clientKey.channel();
-                    int n = client.read(buffer.clear());
+                    buffer.clear();
+                    int n;
+                    if (tls != null) {
+                        n = tls.read(buffer);
+                    } else {
+                        SocketChannel client = (SocketChannel) clientKey.channel();
+                        n = client.read(buffer);
+                    }
                     if (n == -1) {
                         close("client closed");
                         return;
@@ -378,7 +607,9 @@ final class TcpReactorPool {
                     buffer.flip();
                     byte[] data = new byte[n];
                     buffer.get(data);
-                    xor.decode(data, 0, n);
+                    if (xor != null) {
+                        xor.decode(data, 0, n);
+                    }
                     toRemote.add(ByteBuffer.wrap(data));
                     pendingToRemoteBytes += n;
                     if (pendingToRemoteBytes >= MAX_PENDING_BYTES) {
@@ -420,7 +651,9 @@ final class TcpReactorPool {
                     buffer.flip();
                     byte[] data = new byte[n];
                     buffer.get(data);
-                    xor.encode(data, 0, n);
+                    if (xor != null) {
+                        xor.encode(data, 0, n);
+                    }
                     toClient.add(ByteBuffer.wrap(data));
                     pendingToClientBytes += n;
                     if (pendingToClientBytes >= MAX_PENDING_BYTES) {
@@ -441,11 +674,62 @@ final class TcpReactorPool {
 
             private void flushToClient() {
                 if (clientKey == null || !clientKey.isValid()) return;
-                flush(clientKey, toClient, clientKey.channel(), c -> {
-                    pendingToClientBytes -= c;
-                    updateRemoteInterest();
-                });
+                if (tls != null) {
+                    flushTlsToClient();
+                } else {
+                    flush(clientKey, toClient, clientKey.channel(), c -> {
+                        pendingToClientBytes -= c;
+                        updateRemoteInterest();
+                    });
+                }
                 updateClientInterest();
+            }
+
+            private void flushTlsToClient() {
+                try {
+                    while (tls.hasPendingOutput()) {
+                        if (!tls.flushPending()) {
+                            setInterestOps(
+                                clientKey,
+                                clientKey.interestOps() | SelectionKey.OP_WRITE
+                            );
+                            return;
+                        }
+                    }
+                    while (!toClient.isEmpty()) {
+                        ByteBuffer b = toClient.peek();
+                        int consumed = tls.write(b);
+                        if (consumed < 0) {
+                            close("tls write closed");
+                            return;
+                        }
+                        if (consumed == 0) {
+                            setInterestOps(
+                                clientKey,
+                                clientKey.interestOps() | SelectionKey.OP_WRITE
+                            );
+                            return;
+                        }
+                        pendingToClientBytes -= consumed;
+                        if (!b.hasRemaining()) {
+                            toClient.poll();
+                        }
+                        updateRemoteInterest();
+                        if (tls.hasPendingOutput()) {
+                            setInterestOps(
+                                clientKey,
+                                clientKey.interestOps() | SelectionKey.OP_WRITE
+                            );
+                            return;
+                        }
+                    }
+                    setInterestOps(
+                        clientKey,
+                        clientKey.interestOps() & ~SelectionKey.OP_WRITE
+                    );
+                } catch (IOException e) {
+                    close("client write failed");
+                }
             }
 
             private void flushToRemote() {
@@ -468,7 +752,12 @@ final class TcpReactorPool {
                 try {
                     while (!q.isEmpty()) {
                         ByteBuffer b = q.peek();
+                        int before = b.remaining();
                         socket.write(b);
+                        int consumed = before - b.remaining();
+                        if (consumed > 0) {
+                            onFlushed.accept(consumed);
+                        }
                         if (b.hasRemaining()) {
                             setInterestOps(
                                 key,
@@ -477,7 +766,6 @@ final class TcpReactorPool {
                             return;
                         }
                         q.poll();
-                        onFlushed.accept((long) b.capacity());
                     }
                     setInterestOps(
                         key,
@@ -510,7 +798,9 @@ final class TcpReactorPool {
                 int ops = (pendingToRemoteBytes < MAX_PENDING_BYTES
                     ? SelectionKey.OP_READ
                     : 0);
-                if (!toClient.isEmpty()) ops |= SelectionKey.OP_WRITE;
+                if (!toClient.isEmpty() || (tls != null && tls.hasPendingOutput())) {
+                    ops |= SelectionKey.OP_WRITE;
+                }
                 setInterestOps(clientKey, ops);
             }
 
@@ -546,7 +836,9 @@ final class TcpReactorPool {
 
             private void closeClient() {
                 try {
-                    if (clientKey != null) {
+                    if (tls != null) {
+                        tls.close();
+                    } else if (clientKey != null) {
                         ((SocketChannel) clientKey.channel()).close();
                     }
                 } catch (IOException ignored) {}

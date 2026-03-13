@@ -67,10 +67,13 @@ func runTUI() error {
 	return err
 }
 
-const probeTimeout = 5 * time.Second
+const (
+	probeTimeout         = 2 * time.Second
+	preflightProbeTimeout = 1200 * time.Millisecond
+)
 
-func checkDNS() bool {
-	return probe.DNSOK(nil, probeTimeout)
+func checkDNS(timeout time.Duration) bool {
+	return probe.DNSOK(nil, timeout)
 }
 
 func classifyError(err error) string {
@@ -106,9 +109,10 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		return nil, fmt.Errorf("server и token обязательны")
 	}
 	start := time.Now()
-	dnsOK := checkDNS()
-	rttBefore, _ := probe.Ping(cfg.Server, probeTimeout)
-	probeOK, _, _ := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
+	dnsOK := checkDNS(preflightProbeTimeout)
+	rttBefore, _ := probe.Ping(cfg.Server, preflightProbeTimeout)
+	trName := transport.Normalize(cfg.Transport)
+	probeOK, _, _ := probe.ProbePterovpnTransport(cfg.Server, cfg.Token, trName, preflightProbeTimeout)
 
 	record := metrics.SessionRecord{
 		Start:          start,
@@ -172,7 +176,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		prot = &p
 	}
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
-		ok, _, err := probe.ProbePterovpnTransport(addrs[0], cfg.Token, transport.Normalize(cfg.Transport), probeTimeout)
+		ok, _, err := probe.ProbePterovpnTransport(addrs[0], cfg.Token, trName, preflightProbeTimeout)
 		if err != nil || !ok {
 			record.ErrorType = "preCheck"
 			record.End = time.Now()
@@ -224,7 +228,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			record.End = time.Now()
 			record.Duration = time.Since(start)
 			record.ErrorType = "graceful"
-			record.DNSOKAfter = checkDNS()
+			record.DNSOKAfter = checkDNS(preflightProbeTimeout)
 			if store, loadErr := metrics.Load(); loadErr == nil {
 				_ = store.Append(record)
 			}

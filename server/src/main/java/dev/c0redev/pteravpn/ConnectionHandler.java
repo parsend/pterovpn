@@ -9,12 +9,16 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.security.MessageDigest;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
+import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
@@ -45,6 +49,8 @@ final class ConnectionHandler implements Runnable {
         Socket s = sock;
         OutputStream rawOut = null;
         boolean xorTransport = true;
+        InputStream in = null;
+        OutputStream out = null;
         try {
             s.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
             rawOut = s.getOutputStream();
@@ -52,27 +58,70 @@ final class ConnectionHandler implements Runnable {
             String transportName = Protocol.readTransportPreface(rawIn);
             xorTransport = !"mtls".equals(transportName);
 
-            InputStream in;
-            OutputStream out;
             XorStream xor = null;
+            TlsTunnel tlsTunnel = null;
             if (xorTransport) {
                 xor = new XorStream(XorStream.keyFromToken(cfg.token()));
                 in = xor.wrapInput(rawIn);
                 out = xor.wrapOutput(rawOut);
             } else {
-                SSLSocket tlsSocket = upgradeToMtls(s, rawIn, cfg);
-                s = tlsSocket;
-                in = tlsSocket.getInputStream();
-                out = tlsSocket.getOutputStream();
+                byte[] peek = peek(rawIn, 6);
+                if (peek.length < 6) {
+                    throw new EOFException();
+                }
+                if (!looksLikeTlsClientHello(peek)) {
+                    log.warning("mtls preface with non-tls payload from " + s.getRemoteSocketAddress() + ", fallback to xor");
+                    transportName = "xor-fallback";
+                    xorTransport = true;
+                    xor = new XorStream(XorStream.keyFromToken(cfg.token()));
+                    in = xor.wrapInput(rawIn);
+                    out = xor.wrapOutput(rawOut);
+                } else {
+                    int recordLen = ((peek[3] & 0xff) << 8) | (peek[4] & 0xff);
+                    if (recordLen <= 0 || recordLen > 16384) {
+                        throw new IOException("mtls: invalid record length");
+                    }
+                    byte[] rest = Protocol.readN(rawIn, recordLen);
+                    byte[] initialTls = new byte[6 + recordLen];
+                    System.arraycopy(peek, 0, initialTls, 0, 6);
+                    System.arraycopy(rest, 0, initialTls, 6, recordLen);
+                    SocketChannel ch = s.getChannel();
+                    if (ch == null) {
+                        throw new IOException("mtls: socket has no channel");
+                    }
+                    SSLContext ctx = mtlsMaterial(cfg).serverContext();
+                    SSLEngine engine = ctx.createSSLEngine();
+                    engine.setUseClientMode(false);
+                    engine.setNeedClientAuth(true);
+                    tlsTunnel = new TlsTunnel(ch, engine);
+                    tlsTunnel.setInitialEncrypted(initialTls);
+                    tcpPool.registerMtlsPending(ch, tlsTunnel, cfg.token());
+                    handedOff = true;
+                    return;
+                }
             }
 
             Protocol.HandshakeResult hr = Protocol.readHandshake(in);
             Protocol.Handshake hs = hr.handshake();
-            if (!MessageDigest.isEqual(
-                    cfg.token().getBytes(StandardCharsets.UTF_8),
-                    hs.token().getBytes(StandardCharsets.UTF_8))) {
-                log.warning("bad token from " + s.getRemoteSocketAddress());
-                if (xorTransport) sendCapabilityByte(rawOut);
+            String expectedToken = cfg.token();
+            String receivedToken = hs.token();
+            byte[] expectedTokenBytes = expectedToken.getBytes(StandardCharsets.UTF_8);
+            byte[] receivedTokenBytes = receivedToken.getBytes(StandardCharsets.UTF_8);
+            if (!MessageDigest.isEqual(expectedTokenBytes, receivedTokenBytes)) {
+                log.warning("bad token from " + s.getRemoteSocketAddress()
+                    + " (recvLen=" + receivedTokenBytes.length
+                    + " expectLen=" + expectedTokenBytes.length
+                    + " recv=\"" + receivedToken + "\""
+                    + " expect=\"" + expectedToken + "\")");
+                sendCapabilityByte(xorTransport ? rawOut : out);
+                try {
+                    s.shutdownOutput();
+                } catch (IOException ignored) {}
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
                 throw new IOException("bad token");
             }
 
@@ -101,20 +150,24 @@ final class ConnectionHandler implements Runnable {
                 return;
             }
             if (hs.role() == Protocol.ROLE_TCP) {
-                handleTcp(in, s, xor);
+                handleTcp(in, s, xor, tlsTunnel);
                 handedOff = true;
                 return;
             }
             log.warning("unknown role " + hs.role() + " from " + s.getRemoteSocketAddress());
             throw new IOException("bad role");
         } catch (EOFException ignored) {
-            if (xorTransport) sendCapabilityByte(rawOut);
+            sendCapabilityByte(out != null ? out : (xorTransport ? rawOut : null));
         } catch (SocketTimeoutException e) {
             log.warning("handshake timeout from " + s.getRemoteSocketAddress() + " after " + HANDSHAKE_TIMEOUT_MS + "ms");
-            if (xorTransport) sendCapabilityByte(rawOut);
+            sendCapabilityByte(out != null ? out : (xorTransport ? rawOut : null));
         } catch (IOException e) {
-            log.fine("conn closed: " + e.getMessage());
-            if (xorTransport) sendCapabilityByte(rawOut);
+            if (xorTransport) {
+                log.fine("conn closed: " + e.getMessage());
+            } else {
+                log.warning("mtls conn error from " + s.getRemoteSocketAddress() + ": " + e.getMessage());
+            }
+            sendCapabilityByte(out != null ? out : (xorTransport ? rawOut : null));
         } finally {
             if (!handedOff) {
                 try {
@@ -143,6 +196,27 @@ final class ConnectionHandler implements Runnable {
         } catch (Throwable ignored) {}
     }
 
+    private static byte[] peek(BufferedInputStream in, int n) throws IOException {
+        in.mark(n);
+        byte[] buf = in.readNBytes(n);
+        in.reset();
+        return buf;
+    }
+
+    private static boolean looksLikeTlsClientHello(byte[] h) {
+        if (h == null || h.length < 6) return false;
+        int type = h[0] & 0xff;
+        int major = h[1] & 0xff;
+        int minor = h[2] & 0xff;
+        int len = ((h[3] & 0xff) << 8) | (h[4] & 0xff);
+        int handshakeType = h[5] & 0xff;
+        if (type != 0x16) return false;
+        if (major != 0x03) return false;
+        if (minor < 0x00 || minor > 0x04) return false;
+        if (len <= 0 || len > 16709) return false;
+        return handshakeType == 0x01;
+    }
+
     private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)
         throws IOException {
         UdpSessions.UdpChannelWriter writer = udp.createWriter(out, opts.orElse(null));
@@ -162,18 +236,23 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private void handleTcp(InputStream in, Socket s, XorStream xor) throws IOException {
+    private void handleTcp(InputStream in, Socket s, XorStream xor, TlsTunnel tlsTunnel) throws IOException {
         Protocol.TcpConnect c = Protocol.readTcpConnect(in);
         log.info("TCP connect to " + c.ip().getHostAddress() + ":" + c.port());
+        if (tcpPool == null) {
+            relayTcp(in, s, c);
+            return;
+        }
+        int available = in.available();
+        byte[] initialClientData = available > 0 ? in.readNBytes(available) : null;
+        if (tlsTunnel != null) {
+            tcpPool.register(tlsTunnel.channel(), c, null, tlsTunnel, initialClientData, true);
+            return;
+        }
         if (xor == null) {
             relayTcp(in, s, c);
             return;
         }
-        if (tcpPool == null) {
-            throw new IOException("tcp reactor unavailable");
-        }
-        int available = in.available();
-        byte[] initialClientData = available > 0 ? in.readNBytes(available) : null;
         tcpPool.register(s, c, xor, initialClientData, true);
     }
 

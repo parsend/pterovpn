@@ -89,6 +89,13 @@ func ProbePterovpnTransport(addr string, token string, transportName string, tim
 	if timeout <= 0 {
 		timeout = defaultProbeTimeout
 	}
+	probeToken := "probe-bad-token"
+	transportName = transport.Normalize(transportName)
+	if transportName == transport.NameMTLS {
+		if _, err := transport.LoadClientBundle(addr, token); err != nil {
+			transportName = transport.NameXOR
+		}
+	}
 	cres, err := transport.Dial(addr, token, transportName)
 	if err != nil {
 		return false, false, err
@@ -101,7 +108,7 @@ func ProbePterovpnTransport(addr string, token string, transportName string, tim
 	junkCount, junkMin, junkMax := 2, 64, 512
 	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
 	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() })
-	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, token); err != nil {
+	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, probeToken); err != nil {
 		log.Printf("probe: handshake write: %v", err)
 		return false, false, err
 	}

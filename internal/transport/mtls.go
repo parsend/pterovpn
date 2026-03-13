@@ -21,7 +21,7 @@ import (
 	"github.com/parsend/pterovpn/internal/protocol"
 )
 
-const bootstrapTimeout = 10 * time.Second
+const bootstrapTimeout = 45 * time.Second
 
 type ClientBundle struct {
 	ServerCertPEM []byte
@@ -128,6 +128,21 @@ func RemoveClientBundle(serverAddr, token string) error {
 }
 
 func BootstrapClientBundle(serverAddr, token string) (ClientBundle, error) {
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		bundle, err := bootstrapClientBundleOnce(serverAddr, token)
+		if err == nil {
+			return bundle, nil
+		}
+		last = err
+		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			break
+		}
+	}
+	return ClientBundle{}, last
+}
+
+func bootstrapClientBundleOnce(serverAddr, token string) (ClientBundle, error) {
 	c, err := net.DialTimeout("tcp", serverAddr, bootstrapTimeout)
 	if err != nil {
 		return ClientBundle{}, err
@@ -151,30 +166,44 @@ func BootstrapClientBundle(serverAddr, token string) (ClientBundle, error) {
 }
 
 func ClientTLSConfig(serverAddr, token string) (*tls.Config, error) {
+	makeConfig := func(bundle ClientBundle) (*tls.Config, error) {
+		pair, err := tls.X509KeyPair(bundle.ClientCertPEM, bundle.ClientKeyPEM)
+		if err != nil {
+			return nil, err
+		}
+		expectedServer := bytes.TrimSpace(bundle.ServerCertPEM)
+		return &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			Certificates:       []tls.Certificate{pair},
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+				if len(rawCerts) == 0 {
+					return errors.New("mtls: missing server cert")
+				}
+				got := pemEncodeCert(rawCerts[0])
+				if !bytes.Equal(bytes.TrimSpace(got), expectedServer) {
+					return errors.New("mtls: unexpected server cert")
+				}
+				return nil
+			},
+		}, nil
+	}
+
 	bundle, err := EnsureClientBundle(serverAddr, token)
 	if err != nil {
 		return nil, err
 	}
-	pair, err := tls.X509KeyPair(bundle.ClientCertPEM, bundle.ClientKeyPEM)
+	cfg, err := makeConfig(bundle)
+	if err == nil {
+		return cfg, nil
+	}
+
+	_ = RemoveClientBundle(serverAddr, token)
+	bundle, err = EnsureClientBundle(serverAddr, token)
 	if err != nil {
 		return nil, err
 	}
-	expectedServer := bytes.TrimSpace(bundle.ServerCertPEM)
-	return &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		Certificates:       []tls.Certificate{pair},
-		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return errors.New("mtls: missing server cert")
-			}
-			got := pemEncodeCert(rawCerts[0])
-			if !bytes.Equal(bytes.TrimSpace(got), expectedServer) {
-				return errors.New("mtls: unexpected server cert")
-			}
-			return nil
-		},
-	}, nil
+	return makeConfig(bundle)
 }
 
 func readBootstrapBundle(r io.Reader) (ClientBundle, error) {
