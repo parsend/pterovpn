@@ -116,11 +116,20 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 }
 
 func configureTunWindows(name, cidr string, _ int) error {
-	ip, mask, err := parseCIDR(cidr)
+	ip, prefixLen, err := parseCIDR(cidr)
 	if err != nil {
 		return err
 	}
-	args := []string{"interface", "ipv4", "set", "address", "name=" + `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`, "static", ip, mask, "store=active"}
+	iface := `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+	var args []string
+	if os.Getenv("PTERA_NETSH_STYLE") == "legacy" {
+		
+		mask := prefixLenToMask(prefixLen)
+		args = []string{"interface", "ipv4", "set", "address", "name=" + iface, "static", ip, mask, "store=active"}
+	} else {
+		
+		args = []string{"interface", "ipv4", "set", "address", "name=" + iface, "source=static", "address=" + ip + "/" + prefixLen, "store=active"}
+	}
 	out, err := exec.Command("netsh", args...).CombinedOutput()
 	if err == nil {
 		return nil
@@ -133,6 +142,19 @@ func configureTunWindows(name, cidr string, _ int) error {
 		return err
 	}
 	return fmt.Errorf("netsh: %w: %s", err, msg)
+}
+
+func prefixLenToMask(prefixLen string) string {
+	switch prefixLen {
+	case "8":
+		return "255.0.0.0"
+	case "16":
+		return "255.255.0.0"
+	case "24":
+		return "255.255.255.0"
+	default:
+		return "255.255.255.0"
+	}
 }
 
 func configureTunWindowsV6(name, cidr string) error {
@@ -175,24 +197,27 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
 }
 
-func parseCIDR(cidr string) (ip, mask string, err error) {
+func parseCIDR(cidr string) (ip, prefixLen string, err error) {
 	idx := strings.Index(cidr, "/")
 	if idx < 0 {
 		return "", "", errors.New("bad cidr")
 	}
 	ip = strings.TrimSpace(cidr[:idx])
-	maskLen := cidr[idx+1:]
-	switch maskLen {
-	case "24":
-		mask = "255.255.255.0"
-	case "16":
-		mask = "255.255.0.0"
-	case "8":
-		mask = "255.0.0.0"
-	default:
-		mask = "255.255.255.0"
+	prefixLen = strings.TrimSpace(cidr[idx+1:])
+	if prefixLen == "" {
+		return "", "", errors.New("bad cidr")
 	}
-	return ip, mask, nil
+	// clamp to 0–32 for netsh (avoids "siteprefixlength" locale error)
+	if n, e := strconv.Atoi(prefixLen); e == nil {
+		if n < 0 {
+			prefixLen = "0"
+		} else if n > 32 {
+			prefixLen = "32"
+		}
+	} else {
+		prefixLen = "24"
+	}
+	return ip, prefixLen, nil
 }
 
 func parseCIDRv6(cidr string) (ip, prefix string, err error) {
@@ -204,6 +229,15 @@ func parseCIDRv6(cidr string) (ip, prefix string, err error) {
 	prefix = strings.TrimSpace(cidr[idx+1:])
 	if ip == "" || prefix == "" {
 		return "", "", errors.New("bad cidr")
+	}
+	if n, e := strconv.Atoi(prefix); e == nil {
+		if n < 0 {
+			prefix = "0"
+		} else if n > 128 {
+			prefix = "128"
+		}
+	} else {
+		prefix = "64"
 	}
 	return ip, prefix, nil
 }
