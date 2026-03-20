@@ -3,7 +3,7 @@
 # Мобильная версия в разработке.
 #  Проект был написан unitdev - telegram: tcptransit
 
-License: MIT © c0redev (parsend)
+License: MIT © unitdev (parsend)
 
 ## server (java)
 
