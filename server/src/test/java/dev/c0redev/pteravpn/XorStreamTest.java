@@ -15,17 +15,18 @@ class XorStreamTest {
     var key = XorStream.keyFromToken("secret");
     var xor = new XorStream(key);
     var data = "hello vpn".getBytes();
+    var plain = data.clone();
     var buf = new ByteArrayOutputStream();
     try (var w = xor.wrapOutput(buf)) {
       w.write(data);
     }
     var out = buf.toByteArray();
-    assertFalse(java.util.Arrays.equals(data, out));
+    assertFalse(java.util.Arrays.equals(plain, out));
 
     var xor2 = new XorStream(key);
     var in = xor2.wrapInput(new ByteArrayInputStream(out));
     var dec = in.readAllBytes();
-    assertArrayEquals(data, dec);
+    assertArrayEquals(plain, dec);
   }
 
   @Test
