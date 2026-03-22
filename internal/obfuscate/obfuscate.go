@@ -31,20 +31,31 @@ var writeBufPool = sync.Pool{
 func (c *xorConn) Write(p []byte) (n int, err error) {
 	buf := writeBufPool.Get().(*[]byte)
 	defer writeBufPool.Put(buf)
-	if cap(*buf) < len(p) {
-		*buf = make([]byte, len(p)*2)
+	need := len(p)
+	if cap(*buf) < need {
+		*buf = make([]byte, need)
 	}
-	b := (*buf)[:len(p)]
+	b := (*buf)[:need]
 	copy(b, p)
 	xorBytes(b, c.key, &c.wPos)
 	return c.Conn.Write(b)
 }
 
 func xorBytes(b, key []byte, pos *int) {
-	for i := range b {
-		b[i] ^= key[*pos%len(key)]
-		*pos++
+	kl := len(key)
+	p0 := *pos
+	if kl == 32 {
+		for i := range b {
+			b[i] ^= key[p0&31]
+			p0++
+		}
+	} else {
+		for i := range b {
+			b[i] ^= key[p0%kl]
+			p0++
+		}
 	}
+	*pos = p0
 }
 
 func WrapConn(conn net.Conn, token string) net.Conn {

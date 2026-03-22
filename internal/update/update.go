@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const apiURL = "https://api.github.com/repos/parsend/pterovpn/releases/latest"
+const apiURL = "https://api.github.com/repos/unitdevgcc/pterovpn/releases/latest"
 
 type ghRelease struct {
 	TagName string `json:"tag_name"`

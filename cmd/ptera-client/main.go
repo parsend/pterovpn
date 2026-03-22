@@ -8,8 +8,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/netcfg"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/netcfg"
 )
 
 var version = "dev"

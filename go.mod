@@ -1,4 +1,4 @@
-module github.com/parsend/pterovpn
+module github.com/unitdevgcc/pterovpn
 
 go 1.24.2
 

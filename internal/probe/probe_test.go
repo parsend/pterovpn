@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/parsend/pterovpn/internal/obfuscate"
-	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
 func TestPingInvalidAddr(t *testing.T) {

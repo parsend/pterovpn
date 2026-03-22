@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/obfuscate"
-	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -390,8 +390,9 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	}
 	defer sconn.Close()
 
+
 	
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(30 * time.Minute)
 	_ = tc.SetReadDeadline(deadline)
 	_ = tc.SetWriteDeadline(deadline)
 	_ = sconn.SetReadDeadline(deadline)

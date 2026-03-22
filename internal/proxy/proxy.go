@@ -6,10 +6,10 @@ import (
 	"io"
 	"net"
 
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/protocol"
-	"github.com/parsend/pterovpn/internal/tunnel"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 )
 
 func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions) error {

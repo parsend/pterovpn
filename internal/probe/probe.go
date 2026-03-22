@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/parsend/pterovpn/internal/obfuscate"
-	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
 var defaultDNSAddrs = []string{"8.8.8.8:53", "1.1.1.1:53"}

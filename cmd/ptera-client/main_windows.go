@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/netcfg"
-	"github.com/parsend/pterovpn/internal/proxy"
-	"github.com/parsend/pterovpn/internal/sysproxy"
-	"github.com/parsend/pterovpn/internal/tun"
-	"github.com/parsend/pterovpn/internal/vpn"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/netcfg"
+	"github.com/unitdevgcc/pterovpn/internal/proxy"
+	"github.com/unitdevgcc/pterovpn/internal/sysproxy"
+	"github.com/unitdevgcc/pterovpn/internal/tun"
+	"github.com/unitdevgcc/pterovpn/internal/vpn"
 	"golang.org/x/text/encoding/charmap"
 )
 

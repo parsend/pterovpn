@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/obfuscate"
-	"github.com/parsend/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
 func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions) (net.Conn, error) {

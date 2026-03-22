@@ -15,12 +15,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/geo"
-	"github.com/parsend/pterovpn/internal/metrics"
-	"github.com/parsend/pterovpn/internal/probe"
-	"github.com/parsend/pterovpn/internal/update"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/geo"
+	"github.com/unitdevgcc/pterovpn/internal/metrics"
+	"github.com/unitdevgcc/pterovpn/internal/probe"
+	"github.com/unitdevgcc/pterovpn/internal/update"
 )
 
 const (
@@ -1375,7 +1375,7 @@ func formatRTT(d time.Duration) string {
 
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("pteravpn  dev - c0redev(parsend)"))
+	b.WriteString(titleStyle.Render("pteravpn  dev - c0redev(unitdevgcc)"))
 	if m.updateAvailable != "" {
 		b.WriteString("  ")
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("↑ " + m.updateAvailable))
@@ -1413,7 +1413,7 @@ func (m Model) View() string {
 	switch m.tab {
 	case tabHome:
 		if m.updateAvailable != "" {
-			content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Доступно обновление: " + m.updateAvailable + " — https://github.com/parsend/pterovpn/releases\n\n"))
+			content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Доступно обновление: " + m.updateAvailable + " — https://github.com/unitdevgcc/pterovpn/releases\n\n"))
 		}
 		content.WriteString("Статус\n")
 		switch m.status {

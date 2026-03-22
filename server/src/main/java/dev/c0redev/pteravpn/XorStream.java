@@ -9,87 +9,88 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 final class XorStream {
-  private final byte[] key;
-  private int rPos;
-  private int wPos;
 
-  XorStream(byte[] key) {
-    this.key = key;
-  }
+    private final byte[] key;
+    private int rPos;
+    private int wPos;
 
-  InputStream wrapInput(InputStream in) {
-    return new FilterInputStream(in) {
-      @Override
-      public int read() throws IOException {
-        int b = in.read();
-        if (b == -1) return -1;
-        int k = key[rPos % key.length] & 0xff;
-        rPos++;
-        return (b ^ k) & 0xff;
-      }
-
-      @Override
-      public int read(byte[] b, int off, int len) throws IOException {
-        int n = in.read(b, off, len);
-        if (n <= 0) return n;
-        for (int i = 0; i < n; i++) {
-          b[off + i] ^= key[rPos % key.length];
-          rPos++;
-        }
-        return n;
-      }
-    };
-  }
-
-  OutputStream wrapOutput(OutputStream out) {
-    return new FilterOutputStream(out) {
-      @Override
-      public void write(int b) throws IOException {
-        out.write((b ^ (key[wPos % key.length] & 0xff)) & 0xff);
-        wPos++;
-      }
-
-      @Override
-      public void write(byte[] b, int off, int len) throws IOException {
-        for (int i = 0; i < len; i++) {
-          b[off + i] ^= key[(wPos + i) % key.length];
-        }
-        wPos += len;
-        out.write(b, off, len);
-        for (int i = 0; i < len; i++) {
-          b[off + i] ^= key[(wPos - len + i) % key.length];
-        }
-      }
-    };
-  }
-
-  void decode(byte[] b, int off, int len) {
-    if (len <= 0) return;
-    int limit = off + len;
-    for (int i = off; i < limit; i++) {
-      b[i] ^= key[rPos % key.length];
-      rPos++;
+    XorStream(byte[] key) {
+        this.key = key;
     }
-  }
 
-  void encode(byte[] b, int off, int len) {
-    if (len <= 0) return;
-    int limit = off + len;
-    for (int i = off; i < limit; i++) {
-      b[i] ^= key[wPos % key.length];
-      wPos++;
-    }
-  }
+    InputStream wrapInput(InputStream in) {
+        return new FilterInputStream(in) {
+            @Override
+            public int read() throws IOException {
+                int b = in.read();
+                if (b == -1) return -1;
+                int k = key[rPos % key.length] & 0xff;
+                rPos++;
+                return (b ^ k) & 0xff;
+            }
 
-  static byte[] keyFromToken(String token) {
-    try {
-      MessageDigest md = MessageDigest.getInstance("SHA-256");
-      byte[] h = md.digest(token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-      byte[] key = new byte[32];
-      System.arraycopy(h, 0, key, 0, 32);
-      return key;
-    } catch (NoSuchAlgorithmException e) {
-      throw new RuntimeException(e);
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                int n = in.read(b, off, len);
+                if (n <= 0) return n;
+                for (int i = 0; i < n; i++) {
+                    b[off + i] ^= key[rPos % key.length];
+                    rPos++;
+                }
+                return n;
+            }
+        };
     }
-  }
+
+    OutputStream wrapOutput(OutputStream out) {
+        return new FilterOutputStream(out) {
+            @Override
+            public void write(int b) throws IOException {
+                out.write((b ^ (key[wPos % key.length] & 0xff)) & 0xff);
+                wPos++;
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                int end = off + len;
+                for (int i = off; i < end; i++) {
+                    b[i] ^= (byte) (key[wPos % key.length] & 0xff);
+                    wPos++;
+                }
+                out.write(b, off, len);
+            }
+        };
+    }
+
+    void decode(byte[] b, int off, int len) {
+        if (len <= 0) return;
+        int limit = off + len;
+        for (int i = off; i < limit; i++) {
+            b[i] ^= key[rPos % key.length];
+            rPos++;
+        }
+    }
+
+    void encode(byte[] b, int off, int len) {
+        if (len <= 0) return;
+        int limit = off + len;
+        for (int i = off; i < limit; i++) {
+            b[i] ^= key[wPos % key.length];
+            wPos++;
+        }
+    }
+
+    static byte[] keyFromToken(String token) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] h = md.digest(
+                token.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            );
+            byte[] key = new byte[32];
+            System.arraycopy(h, 0, key, 0, 32);
+            return key;
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

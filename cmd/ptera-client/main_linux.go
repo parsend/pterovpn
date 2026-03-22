@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/netcfg"
-	"github.com/parsend/pterovpn/internal/proxy"
-	"github.com/parsend/pterovpn/internal/tun"
-	"github.com/parsend/pterovpn/internal/vpn"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/netcfg"
+	"github.com/unitdevgcc/pterovpn/internal/proxy"
+	"github.com/unitdevgcc/pterovpn/internal/tun"
+	"github.com/unitdevgcc/pterovpn/internal/vpn"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 )

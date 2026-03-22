@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	frand "math/rand/v2"
 	"net"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ const (
 
 	addrV4 = 4
 	addrV6 = 6
-	maxPad  = 32
+	maxPad = 32
 )
 
 type Handshake struct {
@@ -475,7 +476,7 @@ func WriteUDPFrameWithPad(w *bufio.Writer, f UDPFrame, maxPadVal int) error {
 	}
 	if padLen > 0 {
 		var pad [64]byte
-		_, _ = rand.Read(pad[:padLen])
+		fillUdpPadFast(pad[:padLen])
 		if _, err := w.Write(pad[:padLen]); err != nil {
 			return err
 		}
@@ -494,8 +495,23 @@ func randPadLenN(m int) int {
 	if m <= 0 {
 		return 0
 	}
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(m+1)))
-	return int(n.Int64())
+	return frand.IntN(m + 1)
+}
+
+// fillUdpPadFast fills obfuscation padding (not a security boundary; fast prng).
+func fillUdpPadFast(p []byte) {
+	for len(p) >= 8 {
+		binary.LittleEndian.PutUint64(p, frand.Uint64())
+		p = p[8:]
+	}
+	if len(p) == 0 {
+		return
+	}
+	u := frand.Uint64()
+	for i := range p {
+		p[i] = byte(u)
+		u >>= 8
+	}
 }
 
 func RoleUDP() byte { return roleUDP }

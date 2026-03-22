@@ -13,12 +13,12 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/parsend/pterovpn/internal/clientlog"
-	"github.com/parsend/pterovpn/internal/config"
-	"github.com/parsend/pterovpn/internal/metrics"
-	"github.com/parsend/pterovpn/internal/netcfg"
-	"github.com/parsend/pterovpn/internal/probe"
-	"github.com/parsend/pterovpn/internal/tui"
+	"github.com/unitdevgcc/pterovpn/internal/clientlog"
+	"github.com/unitdevgcc/pterovpn/internal/config"
+	"github.com/unitdevgcc/pterovpn/internal/metrics"
+	"github.com/unitdevgcc/pterovpn/internal/netcfg"
+	"github.com/unitdevgcc/pterovpn/internal/probe"
+	"github.com/unitdevgcc/pterovpn/internal/tui"
 )
 
 type logWriter struct {

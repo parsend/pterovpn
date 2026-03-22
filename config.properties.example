@@ -4,6 +4,6 @@ udpChannels=4
 publicHost=1.2.3.4
 debug=true
 update.enabled=true
-update.repo=parsend/pterovpn
+update.repo=unitdevgcc/pterovpn
 update.checkIntervalMinutes=1
 update.restartExitCode=1
