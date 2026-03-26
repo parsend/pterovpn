@@ -281,10 +281,14 @@ func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID b
 			return err
 		}
 	}
+	optsLen := 0
 	if len(optsJSON) > 0 && len(optsJSON) <= maxOptsLen {
-		if err := writeU16(w, uint16(len(optsJSON))); err != nil {
-			return err
-		}
+		optsLen = len(optsJSON)
+	}
+	if err := writeU16(w, uint16(optsLen)); err != nil {
+		return err
+	}
+	if optsLen > 0 {
 		if _, err := w.Write(optsJSON); err != nil {
 			return err
 		}
@@ -302,14 +306,43 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 			return Handshake{}, errors.New("bad magic")
 		}
 	}
-	return readHandshakeBody(r)
+	hs, err := readHandshakeBody(r)
+	if err != nil {
+		return Handshake{}, err
+	}
+	if err := discardHandshakeOpts(r); err != nil {
+		return Handshake{}, err
+	}
+	return hs, nil
 }
 
 func ReadHandshakeAfterSkip(r *bufio.Reader) (Handshake, error) {
 	if err := SkipUntilMagic(r); err != nil {
 		return Handshake{}, err
 	}
-	return readHandshakeBody(r)
+	hs, err := readHandshakeBody(r)
+	if err != nil {
+		return Handshake{}, err
+	}
+	if err := discardHandshakeOpts(r); err != nil {
+		return Handshake{}, err
+	}
+	return hs, nil
+}
+
+func discardHandshakeOpts(r *bufio.Reader) error {
+	n, err := readU16(r)
+	if err != nil {
+		return err
+	}
+	if n > maxOptsLen {
+		return errors.New("bad opts len")
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err = io.CopyN(io.Discard, r, int64(n))
+	return err
 }
 
 func readHandshakeBody(r *bufio.Reader) (Handshake, error) {
@@ -498,7 +531,6 @@ func randPadLenN(m int) int {
 	return frand.IntN(m + 1)
 }
 
-// fillUdpPadFast fills obfuscation padding (not a security boundary; fast prng).
 func fillUdpPadFast(p []byte) {
 	for len(p) >= 8 {
 		binary.LittleEndian.PutUint64(p, frand.Uint64())

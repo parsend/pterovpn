@@ -2,10 +2,12 @@ package dev.c0redev.pteravpn;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -28,11 +30,36 @@ class ProtocolTest {
     buf.write(Protocol.ROLE_TCP);
     buf.write(u16(tok.length));
     buf.write(tok);
-    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    buf.write(u16(0));
+    var hr = Protocol.readHandshake(new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray())));
     var hs = hr.handshake();
     assertEquals(Protocol.ROLE_TCP, hs.role());
     assertEquals("secret", hs.token());
     assertEquals(-1, hs.channelId());
+  }
+
+  @Test
+  void readHandshakeTcpWithOptsThenReadTcpConnect() throws IOException {
+    byte[] tok = "secret".getBytes();
+    String opts = "{\"padS4\":40}";
+    ByteArrayOutputStream buf = new ByteArrayOutputStream();
+    buf.write("PTVPN".getBytes());
+    buf.write(Protocol.VERSION);
+    buf.write(Protocol.ROLE_TCP);
+    buf.write(u16(tok.length));
+    buf.write(tok);
+    buf.write(u16(opts.length()));
+    buf.write(opts.getBytes(StandardCharsets.UTF_8));
+    buf.write(Protocol.ADDR_V4);
+    buf.write(new byte[]{9, 9, 9, 9});
+    buf.write(u16(443));
+    var in = new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray()));
+    var hr = Protocol.readHandshake(in);
+    assertTrue(hr.opts().isPresent());
+    assertEquals(40, hr.opts().get().padS4());
+    var c = Protocol.readTcpConnect(in);
+    assertArrayEquals(InetAddress.getByAddress(new byte[]{9, 9, 9, 9}).getAddress(), c.ip().getAddress());
+    assertEquals(443, c.port());
   }
 
   @Test
@@ -45,7 +72,8 @@ class ProtocolTest {
     buf.write(u16(tok.length));
     buf.write(tok);
     buf.write(3);
-    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    buf.write(u16(0));
+    var hr = Protocol.readHandshake(new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray())));
     var hs = hr.handshake();
     assertEquals(Protocol.ROLE_UDP, hs.role());
     assertEquals(3, hs.channelId());
@@ -93,7 +121,8 @@ class ProtocolTest {
     buf.write(u16(1));
     buf.write('x');
     buf.write(0);
-    var hr = Protocol.readHandshake(new ByteArrayInputStream(buf.toByteArray()));
+    buf.write(u16(0));
+    var hr = Protocol.readHandshake(new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray())));
     var hs = hr.handshake();
     assertEquals(Protocol.ROLE_UDP, hs.role());
     assertEquals("x", hs.token());

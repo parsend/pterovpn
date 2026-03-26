@@ -3,6 +3,7 @@ package dev.c0redev.pteravpn;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.SocketTimeoutException;
@@ -139,8 +140,21 @@ final class ConnectionHandler implements Runnable {
         if (tcpPool == null) {
             throw new IOException("tcp reactor unavailable");
         }
-        int available = in.available();
-        byte[] initialClientData = available > 0 ? in.readNBytes(available) : null;
+        s.setSoTimeout(0);
+        byte[] initialClientData = drainAvailableWithoutBlocking(in);
         tcpPool.register(s, c, xor, initialClientData, true);
+    }
+
+    private static byte[] drainAvailableWithoutBlocking(InputStream in) throws IOException {
+        if (in.available() <= 0) return null;
+        var acc = new ByteArrayOutputStream();
+        byte[] scratch = new byte[8192];
+        while (in.available() > 0) {
+            int want = Math.min(scratch.length, in.available());
+            int r = in.read(scratch, 0, want);
+            if (r <= 0) break;
+            acc.write(scratch, 0, r);
+        }
+        return acc.size() == 0 ? null : acc.toByteArray();
     }
 }

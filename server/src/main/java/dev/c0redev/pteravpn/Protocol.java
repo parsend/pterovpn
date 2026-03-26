@@ -33,24 +33,12 @@ final class Protocol {
   }
 
   static Optional<ClientOptions> readClientOptions(InputStream in) throws IOException {
-    if (!in.markSupported()) return Optional.empty();
-    if (in.available() < 2) return Optional.empty();
-    in.mark(MAX_OPTS + 4);
     int optsLen = readU16(in);
-    if (optsLen <= 0 || optsLen > MAX_OPTS) {
-      in.reset();
-      return Optional.empty();
-    }
-    if (in.available() < optsLen) {
-      in.reset();
-      return Optional.empty();
-    }
+    if (optsLen == 0) return Optional.empty();
+    if (optsLen > MAX_OPTS) throw new IOException("bad opts len");
     byte[] buf = readN(in, optsLen);
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
-    if (parsed.isEmpty()) {
-      in.reset();
-      return Optional.empty();
-    }
+    if (parsed.isEmpty()) throw new IOException("bad client options json");
     return parsed;
   }
 

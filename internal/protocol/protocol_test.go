@@ -199,6 +199,9 @@ func TestJunkThenHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := discardHandshakeOpts(r); err != nil {
+		t.Fatal(err)
+	}
 	if hs.Token != "t" || hs.Role != RoleTCP() {
 		t.Errorf("got %+v", hs)
 	}
@@ -232,6 +235,9 @@ func TestWriteHandshakeWithPrefix(t *testing.T) {
 	}
 	hs, err := readHandshakeBody(r)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := discardHandshakeOpts(r); err != nil {
 		t.Fatal(err)
 	}
 	if hs.Token != "x" || hs.Role != RoleUDP() {
@@ -305,6 +311,9 @@ func TestMagicSplit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := discardHandshakeOpts(r); err != nil {
+		t.Fatal(err)
+	}
 	if hs.Token != "x" {
 		t.Errorf("got token %q", hs.Token)
 	}
@@ -348,6 +357,9 @@ func TestJunkThenHandshakeWithTLSJunk(t *testing.T) {
 	}
 	hs, err := readHandshakeBody(r)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := discardHandshakeOpts(r); err != nil {
 		t.Fatal(err)
 	}
 	if hs.Token != "tls" {

@@ -19,6 +19,9 @@ func TestWireCompatHandshake(t *testing.T) {
 	if b[5] != 1 || b[6] != RoleTCP() {
 		t.Errorf("version/role %d %d", b[5], b[6])
 	}
+	if len(b) < 2 || b[len(b)-2] != 0 || b[len(b)-1] != 0 {
+		t.Errorf("want trailing big-endian u16(0) opts len, got len=%d", len(b))
+	}
 }
 
 func TestWireCompatUdpFrame(t *testing.T) {
