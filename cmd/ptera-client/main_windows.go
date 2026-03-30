@@ -120,15 +120,13 @@ func configureTunWindows(name, cidr string, _ int) error {
 	if err != nil {
 		return err
 	}
-	iface := `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+	ifParam := netshIPv4NameParam(name)
+	mask := ipv4MaskFromPrefixLen(prefixLen)
 	var args []string
 	if os.Getenv("PTERA_NETSH_STYLE") == "legacy" {
-		
-		mask := prefixLenToMask(prefixLen)
-		args = []string{"interface", "ipv4", "set", "address", "name=" + iface, "static", ip, mask, "store=active"}
+		args = []string{"interface", "ipv4", "set", "address", ifParam, "static", ip, mask, "store=active"}
 	} else {
-		
-		args = []string{"interface", "ipv4", "set", "address", "name=" + iface, "source=static", "address=" + ip + "/" + prefixLen, "store=active"}
+		args = []string{"interface", "ipv4", "set", "address", ifParam, "source=static", "address=" + ip, "mask=" + mask, "store=active"}
 	}
 	out, err := exec.Command("netsh", args...).CombinedOutput()
 	if err == nil {
@@ -144,17 +142,36 @@ func configureTunWindows(name, cidr string, _ int) error {
 	return fmt.Errorf("netsh: %w: %s", err, msg)
 }
 
-func prefixLenToMask(prefixLen string) string {
-	switch prefixLen {
-	case "8":
-		return "255.0.0.0"
-	case "16":
-		return "255.255.0.0"
-	case "24":
-		return "255.255.255.0"
-	default:
-		return "255.255.255.0"
+func netshIPv4NameParam(ifName string) string {
+	if ifName == "" {
+		return `name=""`
 	}
+	if dev, err := net.InterfaceByName(ifName); err == nil {
+		return "name=" + strconv.Itoa(dev.Index)
+	}
+	return `name="` + strings.ReplaceAll(ifName, `"`, `\"`) + `"`
+}
+
+func netshIPv6InterfaceParam(ifName string) string {
+	if ifName == "" {
+		return `interface=""`
+	}
+	if dev, err := net.InterfaceByName(ifName); err == nil {
+		return "interface=" + strconv.Itoa(dev.Index)
+	}
+	return `interface="` + strings.ReplaceAll(ifName, `"`, `\"`) + `"`
+}
+
+func ipv4MaskFromPrefixLen(prefixLen string) string {
+	n, err := strconv.Atoi(strings.TrimSpace(prefixLen))
+	if err != nil || n < 0 || n > 32 {
+		n = 24
+	}
+	if n == 0 {
+		return "0.0.0.0"
+	}
+	m := uint32(^uint32(0) << (32 - n))
+	return fmt.Sprintf("%d.%d.%d.%d", byte(m>>24), byte(m>>16), byte(m>>8), byte(m&0xff))
 }
 
 func configureTunWindowsV6(name, cidr string) error {
@@ -165,12 +182,11 @@ func configureTunWindowsV6(name, cidr string) error {
 	if ip == "" || prefix == "" {
 		return errors.New("bad ipv6 cidr")
 	}
-	iface := `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
-
+	ifParam := netshIPv6InterfaceParam(name)
 	addr := ip + "/" + prefix
 	args := []string{
 		"interface", "ipv6", "add", "address",
-		"interface=" + iface,
+		ifParam,
 		"address=" + addr,
 		"store=active",
 	}
@@ -256,13 +272,13 @@ func addIPv6Routes(iface string, cidrs []*net.IPNet, metric int) error {
 	if len(cidrs) == 0 {
 		return nil
 	}
-	ifaceQuoted := `"` + strings.ReplaceAll(iface, `"`, `\"`) + `"`
+	ifParam := netshIPv6InterfaceParam(iface)
 	metricStr := strconv.Itoa(metric)
 	for _, n := range cidrs {
 		args := []string{
 			"interface", "ipv6", "add", "route",
 			"prefix=" + n.String(),
-			"interface=" + ifaceQuoted,
+			ifParam,
 			"metric=" + metricStr,
 			"store=active",
 		}
@@ -286,12 +302,12 @@ func delIPv6Routes(iface string, cidrs []*net.IPNet) {
 	if len(cidrs) == 0 {
 		return
 	}
-	ifaceQuoted := `"` + strings.ReplaceAll(iface, `"`, `\"`) + `"`
+	ifParam := netshIPv6InterfaceParam(iface)
 	for _, n := range cidrs {
 		args := []string{
 			"interface", "ipv6", "delete", "route",
 			"prefix=" + n.String(),
-			"interface=" + ifaceQuoted,
+			ifParam,
 			"store=active",
 		}
 		_ = exec.Command("netsh", args...).Run()
