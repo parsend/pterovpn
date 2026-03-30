@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -160,6 +161,10 @@ type Model struct {
 	settingsInputs    []textinput.Model
 
 	updateAvailable string
+
+	updateAwaitingConfirm bool
+	updateBusy            string
+	updateErr             string
 
 	connectCount int
 }
@@ -553,7 +558,28 @@ type updateCheckMsg struct {
 	latest string
 }
 
+type updateApplyMsg struct {
+	err error
+}
+
 func LogMessage(s string) tea.Msg { return logMsg(s) }
+
+func runApplyUpdate(tag string) tea.Cmd {
+	return func() tea.Msg {
+		url, err := update.AssetDownloadURLForTag(tag)
+		if err != nil {
+			return updateApplyMsg{err: err}
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return updateApplyMsg{err: err}
+		}
+		if err := update.Apply(exe, url); err != nil {
+			return updateApplyMsg{err: err}
+		}
+		return updateApplyMsg{err: nil}
+	}
+}
 
 func runCheckUpdate(currentVersion string) tea.Cmd {
 	return func() tea.Msg {
@@ -659,6 +685,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc":
+			if m.updateAwaitingConfirm {
+				m.updateAwaitingConfirm = false
+				return m, nil
+			}
 			if m.settingsEditing {
 				m.settingsEditing = false
 				m.settingsFormFocus = 0
@@ -690,6 +720,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "n", "N":
+			if m.updateAwaitingConfirm {
+				m.updateAwaitingConfirm = false
+				return m, nil
+			}
 			if m.deletingCfg != "" {
 				m.deletingCfg = ""
 				return m, nil
@@ -733,6 +767,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, runProbePterovpn(m.cloudCfgs[idx].Server, m.cloudNames[idx])
 				}
 			}
+		case "u", "U":
+			if m.tab == tabHome && m.updateAvailable != "" && m.updateBusy == "" && m.status != statusConnecting {
+				m.updateAwaitingConfirm = true
+				m.updateErr = ""
+				return m, nil
+			}
 		case "r", "R":
 			if m.tab == tabCloud && !m.cloudLoading {
 				return m, m.reloadCloud(true)
@@ -746,6 +786,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "y", "Y":
+			if m.updateAwaitingConfirm && m.updateAvailable != "" && m.updateBusy == "" {
+				m.updateAwaitingConfirm = false
+				m.updateBusy = "скачивание и установка…"
+				m.updateErr = ""
+				if m.stop != nil {
+					m.stop()
+					m.stop = nil
+				}
+				m.status = statusDisconnected
+				m.activeCfg = ""
+				return m, runApplyUpdate(m.updateAvailable)
+			}
 			if m.deletingCfg != "" {
 				_ = config.Delete(m.deletingCfg)
 				m.deletingCfg = ""
@@ -1172,6 +1224,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest
 		return m, nil
+	case updateApplyMsg:
+		m.updateBusy = ""
+		if msg.err != nil {
+			m.updateErr = msg.err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	case cloudFetchedMsg:
 		m.cloudLoading = false
 		if msg.err != "" {
@@ -1413,7 +1472,20 @@ func (m Model) View() string {
 	switch m.tab {
 	case tabHome:
 		if m.updateAvailable != "" {
-			content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Доступно обновление: " + m.updateAvailable + " — https://github.com/unitdevgcc/pterovpn/releases\n\n"))
+			content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("Доступно обновление: " + m.updateAvailable))
+			if m.updateBusy != "" {
+				content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(" — " + m.updateBusy))
+			}
+			content.WriteString("\n")
+			if m.updateErr != "" {
+				content.WriteString(errStyle.Render(m.updateErr) + "\n")
+			}
+			if m.updateAwaitingConfirm {
+				content.WriteString(hintKey.Render("y") + hintText.Render(" скачать и перезапустить  ") + hintKey.Render("n") + hintText.Render(" / Esc отмена\n"))
+			} else if m.updateBusy == "" {
+				content.WriteString(hintKey.Render("u") + hintText.Render(" обновить   ") + lipgloss.NewStyle().Foreground(lipgloss.Color(dim)).Render("https://github.com/unitdevgcc/pterovpn/releases\n"))
+			}
+			content.WriteString("\n")
 		}
 		content.WriteString("Статус\n")
 		switch m.status {
