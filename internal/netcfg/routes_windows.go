@@ -66,36 +66,79 @@ func interfaceByIP(needle string) string {
 	return ""
 }
 
+func netshInterfaceID(name string) string {
+	if name == "" {
+		return ""
+	}
+	if dev, err := net.InterfaceByName(name); err == nil {
+		return strconv.Itoa(dev.Index)
+	}
+	return quoteNetshName(name)
+}
+
+func ifaceIndex(name string) (int, bool) {
+	if name == "" {
+		return 0, false
+	}
+	dev, err := net.InterfaceByName(name)
+	if err != nil {
+		return 0, false
+	}
+	return dev.Index, true
+}
+
+func ipv4DestMask(n *net.IPNet) (dest, mask string, ok bool) {
+	ip4 := n.IP.To4()
+	if ip4 == nil {
+		return "", "", false
+	}
+	m := n.Mask
+	if len(m) != 4 {
+		return "", "", false
+	}
+	destIP := ip4.Mask(n.Mask)
+	return destIP.String(), fmt.Sprintf("%d.%d.%d.%d", m[0], m[1], m[2], m[3]), true
+}
+
+func routeAlreadyExists(msg string) bool {
+	m := strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(m, "already exists") ||
+		strings.Contains(m, "уже существует") ||
+		strings.Contains(m, "object already exists")
+}
+
 func AddBypass(serverIP net.IP, dr DefaultRoute) error {
-	ip := serverIP.String()
-	if serverIP.To4() != nil {
-		ip += "/32"
-	} else {
+	if serverIP.To4() == nil {
 		return nil
 	}
 	DelBypass(serverIP)
-	args := []string{"interface", "ipv4", "add", "route", "prefix=" + ip, "metric=1"}
-	if dr.Dev != "" {
-		args = append(args, "interface="+quoteNetshName(dr.Dev))
+	ip := serverIP.String()
+	if dr.Gateway == "" {
+		return fmt.Errorf("bypass: no default gateway")
 	}
-	if dr.Gateway != "" {
-		args = append(args, "nexthop="+dr.Gateway)
+	args := []string{"add", ip, "mask", "255.255.255.255", dr.Gateway, "metric", "1"}
+	if idx, ok := ifaceIndex(dr.Dev); ok {
+		args = append(args, "if", strconv.Itoa(idx))
 	}
-	args = append(args, "store=active")
-	if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
-		return err
+	out, err := exec.Command("route", args...).CombinedOutput()
+	if err == nil {
+		return nil
 	}
-	return nil
+	msg := decodeNetshOutput(out)
+	if routeAlreadyExists(msg) {
+		return nil
+	}
+	if msg == "" {
+		return fmt.Errorf("route add bypass: %w", err)
+	}
+	return fmt.Errorf("route add bypass: %w: %s", err, msg)
 }
 
 func DelBypass(serverIP net.IP) {
-	ip := serverIP.String()
-	if serverIP.To4() != nil {
-		ip += "/32"
-	} else {
+	if serverIP.To4() == nil {
 		return
 	}
-	_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+ip, "store=active").Run()
+	_ = exec.Command("route", "delete", serverIP.String()).Run()
 }
 
 func AddDefaultViaTun(iface string, metric int) error {
@@ -104,7 +147,7 @@ func AddDefaultViaTun(iface string, metric int) error {
 		gateway = "10.13.37.1"
 	}
 	DelDefaultViaTun(iface)
-	args := []string{"interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + strconv.Itoa(metric), "store=active"}
+	args := []string{"interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=" + netshInterfaceID(iface), "nexthop=" + gateway, "metric=" + strconv.Itoa(metric), "store=active"}
 	if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
 		return err
 	}
@@ -112,7 +155,7 @@ func AddDefaultViaTun(iface string, metric int) error {
 }
 
 func DelDefaultViaTun(iface string) {
-	_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix=0.0.0.0/0", "interface="+quoteNetshName(iface), "store=active").Run()
+	_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix=0.0.0.0/0", "interface="+netshInterfaceID(iface), "store=active").Run()
 }
 
 func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
@@ -120,18 +163,30 @@ func AddExcludeRoutes(dr DefaultRoute, cidrs []*net.IPNet) error {
 		if n.IP.To4() == nil {
 			continue
 		}
-		_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "store=active").Run()
-		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "metric=1"}
-		if dr.Dev != "" {
-			args = append(args, "interface="+quoteNetshName(dr.Dev))
+		dest, mask, ok := ipv4DestMask(n)
+		if !ok {
+			continue
 		}
-		if dr.Gateway != "" {
-			args = append(args, "nexthop="+dr.Gateway)
+		if dr.Gateway == "" {
+			return fmt.Errorf("exclude %s: no default gateway", n.String())
 		}
-		args = append(args, "store=active")
-		if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
+		_ = exec.Command("route", "delete", dest, "mask", mask).Run()
+		args := []string{"add", dest, "mask", mask, dr.Gateway, "metric", "1"}
+		if idx, okI := ifaceIndex(dr.Dev); okI {
+			args = append(args, "if", strconv.Itoa(idx))
+		}
+		out, err := exec.Command("route", args...).CombinedOutput()
+		if err == nil {
+			continue
+		}
+		msg := decodeNetshOutput(out)
+		if routeAlreadyExists(msg) {
+			continue
+		}
+		if msg == "" {
 			return fmt.Errorf("exclude %s: %w", n.String(), err)
 		}
+		return fmt.Errorf("exclude %s: %w: %s", n.String(), err, msg)
 	}
 	return nil
 }
@@ -141,7 +196,11 @@ func DelExcludeRoutes(cidrs []*net.IPNet) {
 		if n.IP.To4() == nil {
 			continue
 		}
-		_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "store=active").Run()
+		dest, mask, ok := ipv4DestMask(n)
+		if !ok {
+			continue
+		}
+		_ = exec.Command("route", "delete", dest, "mask", mask).Run()
 	}
 }
 
@@ -155,9 +214,9 @@ func AddRoutesViaTun(iface string, cidrs []*net.IPNet, metric int) error {
 		return AddDefaultViaTun(iface, metric)
 	}
 	for _, n := range cidrs {
-		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "interface=" + quoteNetshName(iface), "nexthop=" + gateway, "metric=" + metricStr, "store=active"}
+		args := []string{"interface", "ipv4", "add", "route", "prefix=" + n.String(), "interface=" + netshInterfaceID(iface), "nexthop=" + gateway, "metric=" + metricStr, "store=active"}
 		if n.IP.To4() != nil {
-			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+quoteNetshName(iface), "store=active").Run()
+			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+netshInterfaceID(iface), "store=active").Run()
 			if err := runNetsh(args...); err != nil && !errors.Is(err, errNetshAlreadyExists) {
 				return fmt.Errorf("route %s: %w", n.String(), err)
 			}
@@ -173,7 +232,7 @@ func DelRoutesViaTun(iface string, cidrs []*net.IPNet) {
 	}
 	for _, n := range cidrs {
 		if n.IP.To4() != nil {
-			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+quoteNetshName(iface), "store=active").Run()
+			_ = exec.Command("netsh", "interface", "ipv4", "delete", "route", "prefix="+n.String(), "interface="+netshInterfaceID(iface), "store=active").Run()
 		}
 	}
 }
