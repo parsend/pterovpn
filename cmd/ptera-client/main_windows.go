@@ -166,7 +166,14 @@ func configureTunWindowsV6(name, cidr string) error {
 		return errors.New("bad ipv6 cidr")
 	}
 	iface := `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
-	args := []string{"interface", "ipv6", "set", "address", "name=" + iface, "source=static", "address=" + ip, "prefixlength=" + prefix, "store=active"}
+
+	addr := ip + "/" + prefix
+	args := []string{
+		"interface", "ipv6", "add", "address",
+		"interface=" + iface,
+		"address=" + addr,
+		"store=active",
+	}
 	out, err := exec.Command("netsh", args...).CombinedOutput()
 	if err == nil {
 		return nil
@@ -178,7 +185,7 @@ func configureTunWindowsV6(name, cidr string) error {
 	if msg == "" {
 		return err
 	}
-	return fmt.Errorf("netsh ipv6 set address: %w: %s", err, msg)
+	return fmt.Errorf("netsh ipv6 add address: %w: %s", err, msg)
 }
 
 func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
@@ -207,7 +214,10 @@ func parseCIDR(cidr string) (ip, prefixLen string, err error) {
 	if prefixLen == "" {
 		return "", "", errors.New("bad cidr")
 	}
-	// clamp to 0–32 for netsh (avoids "siteprefixlength" locale error)
+	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
+		return "", "", errors.New("tun cidr must be ipv4 (use -tun-cidr6 for ipv6)")
+	}
+	
 	if n, e := strconv.Atoi(prefixLen); e == nil {
 		if n < 0 {
 			prefixLen = "0"
