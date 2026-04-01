@@ -25,8 +25,9 @@ import java.io.OutputStream;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.cert.X509Certificate;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +36,12 @@ import java.util.logging.Logger;
 
 final class QuicServer implements AutoCloseable {
   private static final Logger log = Log.logger(QuicServer.class);
+
+  private static volatile byte[] advertisedQuicLeafPin;
+
+  static byte[] getAdvertisedQuicLeafPin() {
+    return advertisedQuicLeafPin;
+  }
 
   private final Config cfg;
   private final UdpSessions udp;
@@ -57,11 +64,14 @@ final class QuicServer implements AutoCloseable {
     QuicSslContextBuilder sslBuilder;
     File certFile = new File(cfg.quicCertPath());
     File keyFile = new File(cfg.quicKeyPath());
+    X509Certificate quicLeaf;
     if (certFile.isFile() && keyFile.isFile()) {
       sslBuilder = QuicSslContextBuilder.forServer(keyFile, null, certFile);
       log.info("QUIC TLS: PEM " + certFile.getPath() + " + " + keyFile.getPath());
+      quicLeaf = QuicTlsUtil.firstCertFromPem(certFile);
     } else {
       QuicEphemeralCert.Material mat = QuicEphemeralCert.generate(cfg.publicHost());
+      quicLeaf = mat.certificate;
       boolean saved = QuicEphemeralCert.tryPersist(mat, certFile, keyFile);
       sslBuilder = QuicSslContextBuilder.forServer(mat.privateKey, null, mat.certificate);
       if (saved) {
@@ -70,6 +80,8 @@ final class QuicServer implements AutoCloseable {
         log.warning("QUIC TLS: generated EC self-signed in memory only (restart will get a new cert)");
       }
     }
+    log.info("QUIC leaf SHA256 for client quicCertPinSHA256: " + QuicTlsUtil.sha256HexDer(quicLeaf.getEncoded()));
+    advertisedQuicLeafPin = QuicTlsUtil.sha256Raw(quicLeaf.getEncoded());
     QuicSslContext sslContext = sslBuilder.applicationProtocols(cfg.quicAlpn()).build();
     int maxBi = Math.max(4, cfg.quicMaxStreams());
     long streamWin = Math.min(16_000_000L, 1_200_000L + (long) maxBi * 80_000L);
@@ -108,6 +120,7 @@ final class QuicServer implements AutoCloseable {
 
   @Override
   public void close() {
+    advertisedQuicLeafPin = null;
     try {
       if (channel != null) channel.close().syncUninterruptibly();
     } catch (Exception ignored) {}
@@ -231,7 +244,8 @@ final class QuicServer implements AutoCloseable {
               int tcpPortHint = cfg.listenPorts().isEmpty() ? 0 : cfg.listenPorts().get(0);
               Protocol.writeServerHelloCaps(out, new Protocol.ServerHelloCaps(
                   Protocol.CAPS_VERSION, legacyIpv6, transportMask, featureBits,
-                  cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, 0, new byte[0]));
+                  cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, 0, new byte[0],
+                  QuicServer.getAdvertisedQuicLeafPin()));
               return;
             }
             if (hs.role() == Protocol.ROLE_UDP) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/metrics"
 	"github.com/unitdevgcc/pterovpn/internal/netcfg"
 	"github.com/unitdevgcc/pterovpn/internal/probe"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 	"github.com/unitdevgcc/pterovpn/internal/tui"
 )
 
@@ -107,7 +109,6 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	start := time.Now()
 	dnsOK := checkDNS()
 	rttBefore, _ := probe.Ping(cfg.Server, probeTimeout)
-	probeOK, _, _ := probe.ProbePterovpn(cfg.Server, cfg.Token, probeTimeout)
 
 	record := metrics.SessionRecord{
 		Start:          start,
@@ -115,7 +116,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		ConfigName:     configName,
 		DNSOKBefore:    dnsOK,
 		RTTBefore:      rttBefore,
-		ProbeOK:        probeOK,
+		ProbeOK:        false,
 		ReconnectCount: reconnectCount,
 		HandshakeOK:    false,
 	}
@@ -145,6 +146,9 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		return nil, err
 	}
 	addrs = netcfg.ResolveAddrs(addrs, sip)
+	probeOK, _, probeCaps, _ := probe.ProbePterovpnWithCaps(addrs[0], cfg.Token, probeTimeout)
+	record.ProbeOK = probeOK
+
 	routeCIDRs, err := netcfg.ParseCIDRs(cfg.Routes)
 	if err != nil {
 		record.ErrorType = classifyError(err)
@@ -171,21 +175,30 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		prot = &p
 	}
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
-		ok, _, err := probe.ProbePterovpn(addrs[0], cfg.Token, probeTimeout)
-		if err != nil || !ok {
+		if !probeOK {
 			record.ErrorType = "preCheck"
 			record.End = time.Now()
 			record.Duration = time.Since(start)
 			if store, _ := metrics.Load(); store != nil {
 				_ = store.Append(record)
 			}
-			if err != nil {
-				return nil, fmt.Errorf("preCheck: %w", err)
-			}
 			return nil, errors.New("preCheck: server is not pterovpn")
 		}
 	}
 	tunCIDR6 := strings.TrimSpace(cfg.TunCIDR6)
+	var quicRoots *x509.CertPool
+	if ca := strings.TrimSpace(cfg.QuicCaCert); ca != "" {
+		dir, derr := config.Dir()
+		if derr != nil {
+			return nil, fmt.Errorf("config dir: %w", derr)
+		}
+		caPath := config.ResolveQUICCAPath(dir, ca)
+		pool, lerr := config.LoadQUICCAPool(caPath)
+		if lerr != nil {
+			return nil, fmt.Errorf("quicCaCert: %w", lerr)
+		}
+		quicRoots = pool
+	}
 	opts := runOpts{
 		serverIP:          sip,
 		token:             cfg.Token,
@@ -193,7 +206,8 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		quicServer:        cfg.QuicServer,
 		quicServerName:    cfg.QuicServerName,
 		quicSkipVerify:    cfg.QuicSkipVerifyEffective(),
-		quicCertPinSHA256: cfg.QuicCertPinSHA256,
+		quicCertPinSHA256: config.EffectiveQuicCertPin(cfg, probeCaps),
+		quicTLSRoots:      quicRoots,
 		quicTraceLog:      cfg.QuicTraceLog,
 		tunName:           "ptera0",
 		tunCIDR:           "10.13.37.2/24",
@@ -205,6 +219,15 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		proxy:             settings.Mode == "proxy",
 		proxyListen:       settings.ProxyListen,
 		systemProxy:       settings.SystemProxy,
+		dualTransport: func() bool {
+			if probeCaps == nil || !tunnel.UsesQUICTransport(cfg.Transport, cfg.QuicServer) {
+				return false
+			}
+			if strings.EqualFold(strings.TrimSpace(cfg.Transport), "tcp") {
+				return false
+			}
+			return probe.RecommendDualTunTransport(probeCaps, true)
+		}(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

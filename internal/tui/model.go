@@ -379,7 +379,7 @@ func (m *Model) refreshCloudItems() {
 }
 
 func newAddInputs() []textinput.Model {
-	return newInputsWithValues("", "", "", "", "", "", "", "", "", "")
+	return newInputsWithValues("", "", "", "", "", "", "", "", "", "", "")
 }
 
 func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
@@ -534,7 +534,7 @@ func boolStr(b bool) string {
 	return "false"
 }
 
-func newInputsWithValues(name, connection, routes, exclude, tunCIDR6, transport, quicServer, quicServerName, quicSkipVerify, quicCertPin string) []textinput.Model {
+func newInputsWithValues(name, connection, routes, exclude, tunCIDR6, transport, quicServer, quicServerName, quicSkipVerify, quicCertPin, quicCaCert string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
 		t.Placeholder = pl
@@ -557,6 +557,7 @@ func newInputsWithValues(name, connection, routes, exclude, tunCIDR6, transport,
 		ti("quic SNI (пусто = из адреса)", quicServerName),
 		ti("skipVerify пусто|true=self-signed ok, false=CA only", skip),
 		ti("quic pin sha256 hex (пусто = без pin)", quicCertPin),
+		ti("quicCaCert PEM файл путь от ~/.config/pteravpn (пусто)", quicCaCert),
 	}
 }
 
@@ -571,10 +572,11 @@ var cfgFormLabels = []string{
 	"QUIC SNI:",
 	"QUIC skipVerify:",
 	"QUIC cert pin:",
+	"QUIC CA PEM path:",
 }
 
 func configFromConnFormInputs(inputs []textinput.Model) (config.Config, string) {
-	if len(inputs) < 10 {
+	if len(inputs) < 11 {
 		return config.Config{}, "форма конфига сломана"
 	}
 	server, token, ok := config.ParseConnection(strings.TrimSpace(inputs[1].Value()))
@@ -611,6 +613,7 @@ func configFromConnFormInputs(inputs []textinput.Model) (config.Config, string) 
 		QuicServer:        strings.TrimSpace(inputs[6].Value()),
 		QuicServerName:    strings.TrimSpace(inputs[7].Value()),
 		QuicCertPinSHA256: pin,
+		QuicCaCert:        strings.TrimSpace(inputs[10].Value()),
 	}
 	out.QuicSkipVerify = skipPtr
 	return out, ""
@@ -914,7 +917,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editingName = m.cloudNames[idx]
 					cfg := m.cloudCfgs[idx]
 					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6,
-						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256)
+						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256, cfg.QuicCaCert)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -944,7 +947,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editingName = m.names[idx]
 					cfg := m.cfgs[idx]
 					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6,
-						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256)
+						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256, cfg.QuicCaCert)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""

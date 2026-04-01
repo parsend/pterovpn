@@ -17,6 +17,7 @@ type Config struct {
 	QuicServerName    string `json:"quicServerName,omitempty"`
 	QuicSkipVerify    *bool  `json:"quicSkipVerify,omitempty"`
 	QuicCertPinSHA256 string `json:"quicCertPinSHA256,omitempty"`
+	QuicCaCert        string `json:"quicCaCert,omitempty"`
 
 	QuicTraceLog bool               `json:"quicTraceLog,omitempty"`
 	Routes       string             `json:"routes,omitempty"`

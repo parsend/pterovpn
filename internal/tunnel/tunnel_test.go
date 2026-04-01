@@ -48,6 +48,28 @@ func TestResolveQUICDialAddr(t *testing.T) {
 	}
 }
 
+func TestPickQUICForTunTCPFlow(t *testing.T) {
+	ip := net.ParseIP("10.0.0.1")
+	if PickQUICForTunTCPFlow(ip, 22) {
+		t.Error("SSH must use plain TCP path in dual mode")
+	}
+	if PickQUICForTunTCPFlow(ip, 445) {
+		t.Error("SMB must use plain TCP")
+	}
+	if PickQUICForTunTCPFlow(nil, 443) {
+		t.Error("nil IP must not pick QUIC")
+	}
+	var quicish int
+	for p := uint16(60000); p < 60100; p++ {
+		if PickQUICForTunTCPFlow(ip, p) {
+			quicish++
+		}
+	}
+	if quicish < 55 || quicish > 85 {
+		t.Errorf("want ~70%% QUIC in high ports, got %d/100", quicish)
+	}
+}
+
 func TestUsesQUICTransport(t *testing.T) {
 	qs := "h:4433"
 	cases := []struct {

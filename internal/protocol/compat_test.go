@@ -69,3 +69,28 @@ func TestServerHelloCapsRoundtrip(t *testing.T) {
 		t.Fatalf("caps mismatch got=%+v want=%+v", got, caps)
 	}
 }
+
+func TestServerHelloCapsQuicPinRoundtrip(t *testing.T) {
+	pin := make([]byte, 32)
+	for i := range pin {
+		pin[i] = byte(i)
+	}
+	caps := ServerHelloCaps{
+		Version:           CapsVersion,
+		TransportMask:     TransportQUIC,
+		QuicPort:          4433,
+		Nonce:             []byte{1},
+		QuicLeafPinSHA256: pin,
+	}
+	var buf bytes.Buffer
+	if err := WriteServerHelloCaps(&buf, caps); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadServerHelloCaps(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuicLeafPinSHA256) != 32 || !bytes.Equal(got.QuicLeafPinSHA256, pin) {
+		t.Fatalf("pin mismatch")
+	}
+}

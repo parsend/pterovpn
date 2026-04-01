@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -69,7 +68,7 @@ type quicNoopTokenStore struct{}
 func (quicNoopTokenStore) Pop(string) *quic.ClientToken  { return nil }
 func (quicNoopTokenStore) Put(string, *quic.ClientToken) {}
 
-func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string) (*quic.Conn, func(), error) {
+func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool) (*quic.Conn, func(), error) {
 	sniHost := serverName
 	if sniHost == "" {
 		h, _, err := net.SplitHostPort(addr)
@@ -106,6 +105,9 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 		tlsCfg.InsecureSkipVerify = true
 	} else {
 		tlsCfg.InsecureSkipVerify = false
+		if rootCAs != nil {
+			tlsCfg.RootCAs = rootCAs
+		}
 	}
 
 	dialHost, portStr, err := net.SplitHostPort(addr)
@@ -132,15 +134,18 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 	}
 
 	qconf := &quic.Config{
-		EnableDatagrams:      false,
-		MaxIdleTimeout:       8 * time.Minute,
-		HandshakeIdleTimeout: 45 * time.Second,
-		KeepAlivePeriod:      12 * time.Second,
-		TokenStore:           quicNoopTokenStore{},
-		InitialStreamReceiveWindow:     2 * 1024 * 1024,
-		MaxStreamReceiveWindow:         24 * 1024 * 1024,
-		InitialConnectionReceiveWindow: 3 * 1024 * 1024,
-		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
+		EnableDatagrams:                false,
+		MaxIdleTimeout:                 15 * time.Minute,
+		HandshakeIdleTimeout:           60 * time.Second,
+		KeepAlivePeriod:                8 * time.Second,
+		TokenStore:                     quicNoopTokenStore{},
+		InitialStreamReceiveWindow:     3 * 1024 * 1024,
+		MaxStreamReceiveWindow:         32 * 1024 * 1024,
+		InitialConnectionReceiveWindow: 4 * 1024 * 1024,
+		MaxConnectionReceiveWindow:     96 * 1024 * 1024,
+		MaxIncomingStreams:             256,
+		MaxIncomingUniStreams:          256,
+		InitialPacketSize:              1200,
 	}
 
 	var lastErr error
@@ -194,17 +199,34 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 		}
 		lastErr = derr
 	}
-	return nil, nil, wrapQUICDialTLS(lastErr, addr, skipVerify, hasPin)
+	return nil, nil, wrapQUICDialTLS(lastErr, addr, skipVerify, hasPin, rootCAs != nil)
 }
 
-func wrapQUICDialTLS(err error, dialAddr string, skipVerify, hasPin bool) error {
+func wrapQUICDialTLS(err error, dialAddr string, skipVerify, hasPin, hasCustomRoots bool) error {
 	if err == nil {
 		return nil
 	}
 	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "pin mismatch") {
+		return fmt.Errorf("%w - quicCertPinSHA256 не совпадает с логом сервера QUIC leaf SHA256", err)
+	}
+	if strings.Contains(msg, "bad certificate") || strings.Contains(msg, "0x12a") {
+		if hasPin {
+			return fmt.Errorf("%w - проверь quicCertPinSHA256 по QUIC leaf SHA256 на сервере", err)
+		}
+		if !skipVerify {
+			if !hasCustomRoots {
+				return fmt.Errorf("%w - quicCaCert путь к PEM (leaf или CA) или quicCertPinSHA256 из лога сервера", err)
+			}
+			return fmt.Errorf("%w - проверь quicCaCert PEM и quicServerName под SAN сертификата", err)
+		}
+	}
 	if strings.Contains(msg, "x509") || strings.Contains(msg, "certificate") || strings.Contains(msg, "unknown authority") || strings.Contains(msg, "verify") {
 		if !skipVerify && !hasPin {
-			return fmt.Errorf("%w - для self-signed: quicSkipVerify true, пустой ключ в JSON или quicCertPinSHA256; false только для CA", err)
+			if !hasCustomRoots {
+				return fmt.Errorf("%w - публичный CA: без quicCaCert; свой/self-signed: quicCaCert (PEM) или pin", err)
+			}
+			return fmt.Errorf("%w - неверный quicCaCert или имя не совпало с сертификатом (quicServerName)", err)
 		}
 	}
 	if strings.Contains(msg, "no recent network activity") {
@@ -232,33 +254,15 @@ func openUDPChannelOnQUICStream(conn *quic.Conn, stream *quic.Stream, channelID 
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(sconn, bufSize)
 	w := bufio.NewWriterSize(sconn, bufSize)
-	maxPad := 32 + int(slot%16)
-	if maxPad > 64 {
-		maxPad = 64
-	}
-	prefixLen := 0
-	if prot != nil {
-		prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
-		if prefixLen > 64 {
-			prefixLen = 64
-		}
-	}
-	if err := protocol.WriteJunkOrTLSLike(w, 2, 64, 512, "", "", func() { _ = w.Flush() }); err != nil {
-		_ = sconn.Close()
-		return nil, nil, nil, 0, err
-	}
-	var optsJSON []byte
-	if prot != nil {
-		optsJSON, _ = json.Marshal(prot)
-	}
-	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleUDP(), channelID, token, prefixLen, optsJSON, slot); err != nil {
+	maxPad, err := WriteUDPChannelPreambleSlot(w, channelID, token, prot, slot)
+	if err != nil {
 		_ = sconn.Close()
 		return nil, nil, nil, 0, err
 	}
 	return sconn, r, w, maxPad, nil
 }
 
-func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, n int, token string, prot *config.ProtectionOptions) (closeAll func(), sharedConn *quic.Conn, streams []UDPMuxQUICStream, err error) {
+func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, n int, token string, prot *config.ProtectionOptions) (closeAll func(), sharedConn *quic.Conn, streams []UDPMuxQUICStream, err error) {
 	if n < 1 || n > 4 {
 		return nil, nil, nil, fmt.Errorf("quic udp mux: bad n=%d", n)
 	}
@@ -266,7 +270,7 @@ func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVer
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256)
+	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -288,7 +292,9 @@ func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVer
 		if quicTraceOn() {
 			clientlog.Trace("quic mux OpenStreamSync channel=%d", i)
 		}
-		st, e := conn.OpenStreamSync(context.Background())
+		muxOpenCtx, muxOpenCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		st, e := conn.OpenStreamSync(muxOpenCtx)
+		muxOpenCancel()
 		if e != nil {
 			if quicTraceOn() {
 				clientlog.Trace("quic mux OpenStreamSync channel=%d err=%v", i, e)
@@ -316,16 +322,18 @@ func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVer
 	return shutdown, conn, streams, nil
 }
 
-func DialUDPChannelQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, channelID byte, token string, prot *config.ProtectionOptions) (net.Conn, *bufio.Reader, *bufio.Writer, int, error) {
+func DialUDPChannelQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, channelID byte, token string, prot *config.ProtectionOptions) (net.Conn, *bufio.Reader, *bufio.Writer, int, error) {
 	addr, _, err := ResolveQUICDialAddr(serverAddrs, quicServer)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}
-	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256)
+	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}
-	stream, err := conn.OpenStreamSync(context.Background())
+	oneCtx, oneCancel := context.WithTimeout(context.Background(), 45*time.Second)
+	stream, err := conn.OpenStreamSync(oneCtx)
+	oneCancel()
 	if err != nil {
 		_ = conn.CloseWithError(0, "open stream failed")
 		closePC()

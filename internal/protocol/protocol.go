@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	frand "math/rand/v2"
@@ -19,6 +20,8 @@ const maxOptsLen = 512
 
 const HelloCapsHeaderLen = 11
 const HelloCapsMaxNonceLen = 32
+
+const helloCapsExtQuicLeafPin byte = 1
 
 const maxPrefixLen = 64
 
@@ -51,6 +54,7 @@ type ServerHelloCaps struct {
 	TCPPortHint   uint16
 	ObfsProfileID byte
 	Nonce         []byte
+	QuicLeafPinSHA256 []byte
 }
 
 type Handshake struct {
@@ -221,6 +225,13 @@ func WriteServerHelloCaps(w io.Writer, caps ServerHelloCaps) error {
 	payload = append(payload, caps.ObfsProfileID)
 	payload = append(payload, byte(nonceLen))
 	payload = append(payload, caps.Nonce...)
+	if len(caps.QuicLeafPinSHA256) != 0 {
+		if len(caps.QuicLeafPinSHA256) != 32 {
+			return fmt.Errorf("caps quic leaf pin must be 32 bytes")
+		}
+		payload = append(payload, helloCapsExtQuicLeafPin)
+		payload = append(payload, caps.QuicLeafPinSHA256...)
+	}
 	_, err := w.Write(payload)
 	return err
 }
@@ -240,7 +251,7 @@ func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
 			return ServerHelloCaps{}, err
 		}
 	}
-	return ServerHelloCaps{
+	caps := ServerHelloCaps{
 		Version:       buf[0],
 		LegacyIPv6:    buf[1] == 1,
 		TransportMask: buf[2],
@@ -249,7 +260,27 @@ func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
 		TCPPortHint:   binary.BigEndian.Uint16(buf[7:9]),
 		ObfsProfileID: buf[9],
 		Nonce:         nonce,
-	}, nil
+	}
+	tag := make([]byte, 1)
+	n, err := r.Read(tag)
+	if n == 0 {
+		if err == io.EOF {
+			return caps, nil
+		}
+		if err != nil {
+			return caps, err
+		}
+		return caps, nil
+	}
+	if tag[0] != helloCapsExtQuicLeafPin {
+		return ServerHelloCaps{}, fmt.Errorf("caps unknown extension tag %02x", tag[0])
+	}
+	pin := make([]byte, 32)
+	if _, err := io.ReadFull(r, pin); err != nil {
+		return ServerHelloCaps{}, err
+	}
+	caps.QuicLeafPinSHA256 = pin
+	return caps, nil
 }
 
 func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {

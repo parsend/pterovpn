@@ -37,6 +37,15 @@ func TestParseProbeCapsV2(t *testing.T) {
 	if mode := ServerModeFromCaps(caps); mode != "quic/tcp" {
 		t.Fatalf("bad mode: %s", mode)
 	}
+	if !RecommendDualTunTransport(caps, true) {
+		t.Fatal("want dual when quic mux and both transports")
+	}
+	if RecommendDualTunTransport(caps, false) {
+		t.Fatal("want no dual without quic mux")
+	}
+	if RecommendDualTunTransport(nil, true) {
+		t.Fatal("want no dual without caps")
+	}
 }
 
 func TestPingRefused(t *testing.T) {

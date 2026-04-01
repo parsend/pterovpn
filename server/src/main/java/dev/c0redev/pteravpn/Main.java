@@ -87,6 +87,10 @@ public final class Main {
     }, "pteravpn-shutdown"));
 
     try (UdpSessions udp = new UdpSessions(cfg.udpChannels())) {
+      if (cfg.quicEnabled()) {
+        quicHolder[0] = new QuicServer(cfg, udp, streamPool);
+        quicHolder[0].start();
+      }
       if (cfg.tcpEnabled()) {
         for (int port : cfg.listenPorts()) {
           ServerSocketChannel ss = ServerSocketChannel.open();
@@ -95,10 +99,6 @@ public final class Main {
           sockets.add(ss);
           acceptPool.submit(() -> acceptLoop(ss, cfg, udp, handshakePool, streamPool, tcpPool));
         }
-      }
-      if (cfg.quicEnabled()) {
-        quicHolder[0] = new QuicServer(cfg, udp, streamPool);
-        quicHolder[0].start();
       }
 
       synchronized (RUN_LOCK) {

@@ -2,15 +2,31 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/config"
 	"github.com/unitdevgcc/pterovpn/internal/netcfg"
+	"github.com/unitdevgcc/pterovpn/internal/probe"
+	"github.com/unitdevgcc/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 )
+
+func quicDualFromCaps(caps *protocol.ServerHelloCaps, transport, quicServer string) bool {
+	if caps == nil || !tunnel.UsesQUICTransport(transport, quicServer) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(transport), "tcp") {
+		return false
+	}
+	return probe.RecommendDualTunTransport(caps, true)
+}
 
 var version = "dev"
 
@@ -22,6 +38,7 @@ type runOpts struct {
 	quicServerName    string
 	quicSkipVerify    bool
 	quicCertPinSHA256 string
+	quicTLSRoots      *x509.CertPool
 	quicTraceLog      bool
 	tunName           string
 	tunCIDR           string
@@ -33,6 +50,7 @@ type runOpts struct {
 	proxy             bool
 	proxyListen       string
 	systemProxy       bool
+	dualTransport     bool
 }
 
 func main() {
@@ -53,6 +71,7 @@ func run() error {
 		quicServerName = flag.String("quic-server-name", "", "SNI/server name for QUIC TLS")
 		quicSkipVerify = flag.Bool("quic-skip-verify", true, "QUIC TLS, default accept self-signed; false = system CA only")
 		quicCertPin    = flag.String("quic-cert-pin", "", "SHA256 pin of QUIC leaf cert")
+		quicCaCertFile = flag.String("quic-ca-cert", "", "PEM file, CA or server leaf, for verify when quic-skip-verify false")
 		quicTrace      = flag.Bool("quic-trace", false, "verbose QUIC dial logging (or env PTERA_QUIC_TRACE=1)")
 		tunName        = flag.String("tun", "ptera0", "tun name")
 		tunCIDR        = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
@@ -103,6 +122,24 @@ func run() error {
 	}
 
 	prot, _ := config.LoadProtection()
+	var quicRoots *x509.CertPool
+	if p := strings.TrimSpace(*quicCaCertFile); p != "" {
+		pool, err := config.LoadQUICCAPool(p)
+		if err != nil {
+			return err
+		}
+		quicRoots = pool
+	}
+	var probeCaps *protocol.ServerHelloCaps
+	if len(addrs) > 0 {
+		_, _, probeCaps, _ = probe.ProbePterovpnWithCaps(addrs[0], *token, 5*time.Second)
+	}
+	skip := *quicSkipVerify
+	effPin := config.EffectiveQuicCertPin(config.Config{
+		QuicSkipVerify:    &skip,
+		QuicCertPinSHA256: *quicCertPin,
+		QuicCaCert:        strings.TrimSpace(*quicCaCertFile),
+	}, probeCaps)
 	opts := runOpts{
 		serverIP:          sip,
 		token:             *token,
@@ -110,7 +147,8 @@ func run() error {
 		quicServer:        *quicServer,
 		quicServerName:    *quicServerName,
 		quicSkipVerify:    *quicSkipVerify,
-		quicCertPinSHA256: *quicCertPin,
+		quicCertPinSHA256: effPin,
+		quicTLSRoots:      quicRoots,
 		quicTraceLog:      *quicTrace,
 		tunName:           *tunName,
 		tunCIDR:           *tunCIDR,
@@ -122,6 +160,7 @@ func run() error {
 		proxy:             *proxy,
 		proxyListen:       *proxyListen,
 		systemProxy:       *systemProxy,
+		dualTransport:     quicDualFromCaps(probeCaps, *transport, *quicServer),
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
 }

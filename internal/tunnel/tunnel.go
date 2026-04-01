@@ -3,7 +3,8 @@ package tunnel
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"crypto/x509"
 	"net"
 	"strings"
 	"time"
@@ -14,9 +15,35 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
-func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicShared *QUICConn) (net.Conn, error) {
-	if UsesQUICTransport(transport, quicServer) {
-		return dialQUIC(serverAddrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, targetIP, targetPort, token, prot, quicShared)
+func tunTCPPreferPlainTCP(port uint16) bool {
+	switch port {
+	case 135, 139, 445, 3389, 5900, 5985, 5986:
+		return true
+	default:
+		return false
+	}
+}
+
+const dualTunQUICStreamByteThreshold = 180
+
+func PickQUICForTunTCPFlow(dstIP net.IP, dstPort uint16) bool {
+	if dstIP == nil || tunTCPPreferPlainTCP(dstPort) {
+		return false
+	}
+	ip := dstIP.To16()
+	if ip == nil {
+		return false
+	}
+	var b []byte
+	b = append(b, ip...)
+	b = append(b, byte(dstPort>>8), byte(dstPort))
+	h := sha256.Sum256(b)
+	return h[0] < dualTunQUICStreamByteThreshold
+}
+
+func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, tunPreferTCP bool) (net.Conn, error) {
+	if !tunPreferTCP && UsesQUICTransport(transport, quicServer) {
+		return dialQUIC(serverAddrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, targetIP, targetPort, token, prot, quicShared)
 	}
 	addr := pickAddr(serverAddrs, targetIP, targetPort)
 	c, err := dialServer(addr, token)
@@ -27,52 +54,7 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(c, bufSize)
 	w := bufio.NewWriterSize(c, bufSize)
-	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
-	if prot != nil {
-		prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
-		if prefixLen > 64 {
-			prefixLen = 64
-		}
-		prefixLen += int(slot % 8)
-		if prefixLen > 64 {
-			prefixLen = 64
-		}
-		if prot.JunkCount > 0 {
-			junkCount = prot.JunkCount
-			if prot.JunkMin > 0 {
-				junkMin = prot.JunkMin
-			}
-			if prot.JunkMax > junkMin {
-				junkMax = prot.JunkMax
-			}
-		}
-		if strings.EqualFold(prot.Obfuscation, "enhanced") && junkCount > 0 {
-			junkCount += 3
-			if junkCount > 12 {
-				junkCount = 12
-			}
-		}
-	}
-	if junkCount == 0 {
-		junkCount, junkMin, junkMax = 2, 64, 512
-	}
-	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-	junkStyle, flushPolicy := "", ""
-	if prot != nil {
-		junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
-	}
-	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		c.Close()
-		return nil, err
-	}
-	if !strings.EqualFold(flushPolicy, "perChunk") {
-		_ = w.Flush()
-	}
-	var optsJSON []byte
-	if prot != nil {
-		optsJSON, _ = json.Marshal(prot)
-	}
-	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot); err != nil {
+	if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -128,7 +110,7 @@ func dialServer(addr, token string) (net.Conn, error) {
 	return obfuscate.WrapConn(c, token), nil
 }
 
-func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, quicShared *QUICConn) (net.Conn, error) {
+func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, quicShared *QUICConn) (net.Conn, error) {
 	ownsConn := quicShared == nil
 	var conn *QUICConn
 	var err error
@@ -138,7 +120,7 @@ func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipV
 		if err != nil {
 			return nil, err
 		}
-		conn, closePC, err = dialQUICConn(addr, quicServerName, quicSkipVerify, quicCertPinSHA256)
+		conn, closePC, err = dialQUICConn(addr, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +130,9 @@ func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipV
 	if quicTraceOn() {
 		clientlog.Trace("quic tun-tcp OpenStreamSync")
 	}
-	stream, err := conn.OpenStreamSync(context.Background())
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), 45*time.Second)
+	stream, err := conn.OpenStreamSync(streamCtx)
+	streamCancel()
 	if err != nil {
 		if quicTraceOn() {
 			clientlog.Trace("quic tun-tcp OpenStreamSync err=%v", err)
@@ -170,22 +154,7 @@ func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipV
 	slot := protocol.TimeSlot()
 	w := bufio.NewWriterSize(sconn, protocol.BufSizeForConn(slot))
 	r := bufio.NewReaderSize(sconn, protocol.BufSizeForConn(slot))
-	prefixLen, junkCount, junkMin, junkMax := 0, 2, 64, 512
-	if prot != nil {
-		prefixLen = prot.PadS1 + prot.PadS2 + prot.PadS3
-		if prefixLen > 64 {
-			prefixLen = 64
-		}
-	}
-	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() }); err != nil {
-		_ = sconn.Close()
-		return nil, err
-	}
-	var optsJSON []byte
-	if prot != nil {
-		optsJSON, _ = json.Marshal(prot)
-	}
-	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot); err != nil {
+	if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
 		_ = sconn.Close()
 		return nil, err
 	}

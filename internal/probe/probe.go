@@ -105,18 +105,50 @@ func readProbeHelloPayload(c net.Conn, timeout time.Duration) ([]byte, error) {
 			return buf[:protocol.HelloCapsHeaderLen], nil
 		}
 		if nl == 0 {
-			return buf[:protocol.HelloCapsHeaderLen], nil
+			return appendQuicPinExt(c, deadline, buf[:protocol.HelloCapsHeaderLen])
 		}
 		_ = c.SetReadDeadline(deadline)
 		if _, err := io.ReadFull(c, buf[protocol.HelloCapsHeaderLen:protocol.HelloCapsHeaderLen+nl]); err != nil {
 			return nil, err
 		}
-		return buf[:protocol.HelloCapsHeaderLen+nl], nil
+		raw := buf[:protocol.HelloCapsHeaderLen+nl]
+		return appendQuicPinExt(c, deadline, raw)
 	case io.EOF, io.ErrUnexpectedEOF:
 		return buf[:1], nil
 	default:
 		return nil, err
 	}
+}
+
+func appendQuicPinExt(c net.Conn, deadline time.Time, raw []byte) ([]byte, error) {
+	_ = c.SetReadDeadline(deadline)
+	var tag [1]byte
+	n, err := c.Read(tag[:])
+	if n == 0 {
+		if err == io.EOF {
+			return raw, nil
+		}
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return raw, nil
+		}
+		if err != nil {
+			return raw, nil
+		}
+		return raw, nil
+	}
+	if n != 1 || tag[0] != 1 {
+		return raw, nil
+	}
+	pin := make([]byte, 32)
+	_ = c.SetReadDeadline(deadline)
+	if _, err := io.ReadFull(c, pin); err != nil {
+		return raw, err
+	}
+	out := make([]byte, 0, len(raw)+33)
+	out = append(out, raw...)
+	out = append(out, 1)
+	out = append(out, pin...)
+	return out, nil
 }
 
 func parseProbeCaps(raw []byte) (bool, bool, *protocol.ServerHelloCaps, error) {
@@ -146,6 +178,10 @@ func ServerModeFromCaps(caps *protocol.ServerHelloCaps) string {
 		return "quic only"
 	}
 	return "tcp only"
+}
+
+func RecommendDualTunTransport(caps *protocol.ServerHelloCaps, quicMuxWillBeUsed bool) bool {
+	return quicMuxWillBeUsed && ServerModeFromCaps(caps) == "quic/tcp"
 }
 
 func DNSOK(addrs []string, timeout time.Duration) bool {
