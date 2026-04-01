@@ -130,8 +130,7 @@ type udpAssoc struct {
 
 type udpMux struct {
 	chans     []*udpChan
-	mu        sync.RWMutex
-	assoc     map[udpAssocKey]*udpAssoc
+	assoc     sync.Map
 	quicConn  *tunnel.QUICConn
 	quicClose func()
 }
@@ -143,7 +142,6 @@ func (m *udpMux) SharedQUICConn() *tunnel.QUICConn {
 func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
-		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
 	if tunnel.UsesQUICTransport(transport, quicServer) {
 		closeConn, sharedConn, streams, err := tunnel.DialUDPMuxQUIC(addrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, n, token, prot)
@@ -197,15 +195,11 @@ func (m *udpMux) Close() {
 }
 
 func (m *udpMux) register(k udpAssocKey, a *udpAssoc) {
-	m.mu.Lock()
-	m.assoc[k] = a
-	m.mu.Unlock()
+	m.assoc.Store(k, a)
 }
 
 func (m *udpMux) unregister(k udpAssocKey) {
-	m.mu.Lock()
-	delete(m.assoc, k)
-	m.mu.Unlock()
+	m.assoc.Delete(k)
 }
 
 func (m *udpMux) pick(k udpAssocKey) *udpChan {
@@ -223,13 +217,12 @@ func (m *udpMux) send(k udpAssocKey, payload []byte) error {
 
 func (m *udpMux) dispatch(f protocol.UDPFrame) {
 	k := udpAssocKey{SrcPort: f.SrcPort, DstIP: f.DstIP.String(), DstPort: f.DstPort}
-	m.mu.RLock()
-	a := m.assoc[k]
-	m.mu.RUnlock()
-	if a == nil {
+	v, ok := m.assoc.Load(k)
+	if !ok {
 		clientlog.Warn("vpn: udp dispatch no assoc for %d->%s:%d", f.SrcPort, f.DstIP.String(), f.DstPort)
 		return
 	}
+	a := v.(*udpAssoc)
 	if _, err := a.c.WriteTo(f.Payload, nil); err != nil {
 		clientlog.Drop("vpn: udp dispatch write error: %v", err)
 	}

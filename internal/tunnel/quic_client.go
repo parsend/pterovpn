@@ -133,10 +133,14 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 
 	qconf := &quic.Config{
 		EnableDatagrams:      false,
-		MaxIdleTimeout:       5 * time.Minute,
+		MaxIdleTimeout:       8 * time.Minute,
 		HandshakeIdleTimeout: 45 * time.Second,
-		KeepAlivePeriod:      15 * time.Second,
+		KeepAlivePeriod:      12 * time.Second,
 		TokenStore:           quicNoopTokenStore{},
+		InitialStreamReceiveWindow:     2 * 1024 * 1024,
+		MaxStreamReceiveWindow:         24 * 1024 * 1024,
+		InitialConnectionReceiveWindow: 3 * 1024 * 1024,
+		MaxConnectionReceiveWindow:     64 * 1024 * 1024,
 	}
 
 	var lastErr error

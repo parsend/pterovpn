@@ -71,15 +71,18 @@ final class QuicServer implements AutoCloseable {
       }
     }
     QuicSslContext sslContext = sslBuilder.applicationProtocols(cfg.quicAlpn()).build();
+    int maxBi = Math.max(4, cfg.quicMaxStreams());
+    long streamWin = Math.min(16_000_000L, 1_200_000L + (long) maxBi * 80_000L);
+    long connWin = Math.min(120_000_000L, streamWin * maxBi);
     ChannelHandler codec = new QuicServerCodecBuilder()
         .sslContext(sslContext)
         .maxIdleTimeout(cfg.quicIdleTimeoutMs(), TimeUnit.MILLISECONDS)
         .activeMigration(false)
-        .initialMaxStreamsBidirectional(cfg.quicMaxStreams())
+        .initialMaxStreamsBidirectional(maxBi)
         .initialMaxStreamsUnidirectional(0)
-        .initialMaxData(10_000_000)
-        .initialMaxStreamDataBidirectionalLocal(1_000_000)
-        .initialMaxStreamDataBidirectionalRemote(1_000_000)
+        .initialMaxData(connWin)
+        .initialMaxStreamDataBidirectionalLocal(streamWin)
+        .initialMaxStreamDataBidirectionalRemote(streamWin)
         .tokenHandler(PteravpnNoRetryTokenHandler.INSTANCE)
         .handler(quicParentHandler)
         .streamHandler(quicStreamChannelInit).build();
