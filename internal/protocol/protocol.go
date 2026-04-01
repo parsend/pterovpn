@@ -17,6 +17,9 @@ import (
 
 const maxOptsLen = 512
 
+const HelloCapsHeaderLen = 11
+const HelloCapsMaxNonceLen = 32
+
 const maxPrefixLen = 64
 
 var magic = []byte{'P', 'T', 'V', 'P', 'N'}
@@ -32,7 +35,23 @@ const (
 	addrV4 = 4
 	addrV6 = 6
 	maxPad = 32
+
+	CapsVersion   = 1
+	TransportTCP  = 1
+	TransportQUIC = 1 << 1
+	FeatureIPv6   = 1
 )
+
+type ServerHelloCaps struct {
+	Version       byte
+	LegacyIPv6    bool
+	TransportMask byte
+	FeatureBits   uint16
+	QuicPort      uint16
+	TCPPortHint   uint16
+	ObfsProfileID byte
+	Nonce         []byte
+}
 
 type Handshake struct {
 	Role      byte
@@ -177,6 +196,60 @@ func WriteTLSLikeJunk(w io.Writer, count, minLen, maxLen int, flushAfterChunk fu
 
 func WriteHandshake(w *bufio.Writer, role byte, channelID byte, token string) error {
 	return WriteHandshakeWithPrefix(w, role, channelID, token, 0)
+}
+
+func WriteServerHelloCaps(w io.Writer, caps ServerHelloCaps) error {
+	legacy := byte(0)
+	if caps.LegacyIPv6 {
+		legacy = 1
+	}
+	nonceLen := len(caps.Nonce)
+	if nonceLen > HelloCapsMaxNonceLen {
+		return errors.New("caps nonce too long")
+	}
+	payload := make([]byte, 0, 11+nonceLen)
+	payload = append(payload, caps.Version)
+	payload = append(payload, legacy)
+	payload = append(payload, caps.TransportMask)
+	var b2 [2]byte
+	binary.BigEndian.PutUint16(b2[:], caps.FeatureBits)
+	payload = append(payload, b2[:]...)
+	binary.BigEndian.PutUint16(b2[:], caps.QuicPort)
+	payload = append(payload, b2[:]...)
+	binary.BigEndian.PutUint16(b2[:], caps.TCPPortHint)
+	payload = append(payload, b2[:]...)
+	payload = append(payload, caps.ObfsProfileID)
+	payload = append(payload, byte(nonceLen))
+	payload = append(payload, caps.Nonce...)
+	_, err := w.Write(payload)
+	return err
+}
+
+func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
+	buf := make([]byte, 11)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return ServerHelloCaps{}, err
+	}
+	nonceLen := int(buf[10])
+	if nonceLen > HelloCapsMaxNonceLen {
+		return ServerHelloCaps{}, errors.New("caps nonce too long")
+	}
+	nonce := make([]byte, nonceLen)
+	if nonceLen > 0 {
+		if _, err := io.ReadFull(r, nonce); err != nil {
+			return ServerHelloCaps{}, err
+		}
+	}
+	return ServerHelloCaps{
+		Version:       buf[0],
+		LegacyIPv6:    buf[1] == 1,
+		TransportMask: buf[2],
+		FeatureBits:   binary.BigEndian.Uint16(buf[3:5]),
+		QuicPort:      binary.BigEndian.Uint16(buf[5:7]),
+		TCPPortHint:   binary.BigEndian.Uint16(buf[7:9]),
+		ObfsProfileID: buf[9],
+		Nonce:         nonce,
+	}, nil
 }
 
 func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {

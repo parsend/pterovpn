@@ -18,6 +18,7 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/config"
 	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -27,27 +28,47 @@ import (
 )
 
 type Options struct {
-	TunFD       int
-	MTU         int
-	Token       string
-	ServerAddrs []string
-	Ready       func()
-	Device      device.Device
-	CreateDevice func() (device.Device, func(), error)
-	Protection   *config.ProtectionOptions
+	TunFD             int
+	MTU               int
+	Token             string
+	ServerAddrs       []string
+	Ready             func()
+	Device            device.Device
+	CreateDevice      func() (device.Device, func(), error)
+	Protection        *config.ProtectionOptions
+	Transport         string
+	QuicServer        string
+	QuicServerName    string
+	QuicSkipVerify    bool
+	QuicCertPinSHA256 string
+	QuicTraceLog      bool
 }
 
 func Run(ctx context.Context, opt Options) error {
 	if len(opt.ServerAddrs) == 0 {
 		return errors.New("server addrs empty")
 	}
+	tunnel.SetQUICTrace(opt.QuicTraceLog)
+	if opt.QuicTraceLog {
+		clientlog.Info("vpn: quicTraceLog=true — строки TRACE в логе QUIC dial")
+	}
 	clientlog.Info("vpn: starting, servers=%v", opt.ServerAddrs)
+	clientlog.OK("vpn: pteravpn link %s | %s",
+		tunnel.PteravpnTunnelTag(opt.Transport, opt.QuicServer), pteravpnTunnelCfg(opt.Transport, opt.QuicServer))
+	if tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
+		if ep, derived, err := tunnel.ResolveQUICDialAddr(opt.ServerAddrs, opt.QuicServer); err == nil {
+			if derived {
+				clientlog.Info("vpn: QUIC dial %s (host from tcp + udp port %s, set quicServer if different)", ep, tunnel.DefaultQUICPort)
+			} else {
+				clientlog.Info("vpn: QUIC dial %s", ep)
+			}
+		}
+	}
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection, opt.Transport, opt.QuicServer, opt.QuicServerName, opt.QuicSkipVerify, opt.QuicCertPinSHA256)
 	if err != nil {
 		return err
 	}
-	defer udpMux.Close()
 
 	var dev device.Device
 	var closeDev func()
@@ -55,6 +76,7 @@ func Run(ctx context.Context, opt Options) error {
 		var err error
 		dev, closeDev, err = opt.CreateDevice()
 		if err != nil {
+			udpMux.Close()
 			return err
 		}
 		defer closeDev()
@@ -64,6 +86,7 @@ func Run(ctx context.Context, opt Options) error {
 		var err error
 		dev, err = fdbased.Open(strconv.Itoa(opt.TunFD), uint32(opt.MTU), 0)
 		if err != nil {
+			udpMux.Close()
 			return err
 		}
 		defer dev.Close()
@@ -74,12 +97,18 @@ func Run(ctx context.Context, opt Options) error {
 		udpMux: udpMux,
 	}
 
-	if _, err := core.CreateStack(&core.Config{
+	st, err := core.CreateStack(&core.Config{
 		LinkEndpoint:     dev,
 		TransportHandler: h,
-	}); err != nil {
+	})
+	if err != nil {
+		udpMux.Close()
 		return err
 	}
+
+	defer st.Close()
+	defer udpMux.Close()
+
 	clientlog.OK("vpn: netstack ready")
 	if opt.Ready != nil {
 		opt.Ready()
@@ -100,18 +129,49 @@ type udpAssoc struct {
 }
 
 type udpMux struct {
-	chans []*udpChan
-	mu    sync.RWMutex
-	assoc map[udpAssocKey]*udpAssoc
+	chans     []*udpChan
+	mu        sync.RWMutex
+	assoc     map[udpAssocKey]*udpAssoc
+	quicConn  *tunnel.QUICConn
+	quicClose func()
 }
 
-func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions) (*udpMux, error) {
+func (m *udpMux) SharedQUICConn() *tunnel.QUICConn {
+	return m.quicConn
+}
+
+func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 		assoc: make(map[udpAssocKey]*udpAssoc),
 	}
+	if tunnel.UsesQUICTransport(transport, quicServer) {
+		closeConn, sharedConn, streams, err := tunnel.DialUDPMuxQUIC(addrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, n, token, prot)
+		if err != nil {
+			clientlog.Drop("vpn: QUIC UDP mux failed: %v", err)
+			return nil, err
+		}
+		m.quicClose = closeConn
+		m.quicConn = sharedConn
+		for i := 0; i < n; i++ {
+			s := streams[i]
+			uc := &udpChan{
+				conn:   s.Conn,
+				r:      s.R,
+				w:      s.W,
+				maxPad: s.MaxPad,
+				stop:   make(chan struct{}),
+				cb:     m.dispatch,
+			}
+			clientlog.Traffic("vpn: udp ch %d  [%s]  %s", i, tunnel.PteravpnTunnelTag(transport, quicServer), pteravpnTunnelCfg(transport, quicServer))
+			go uc.readLoop()
+			clientlog.OK("vpn: udp channel %d connected", i)
+			m.chans[i] = uc
+		}
+		return m, nil
+	}
 	for i := 0; i < n; i++ {
-		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot)
+		c, err := newUDPChan(byte(i), addrs, token, m.dispatch, prot, transport, quicServer)
 		if err != nil {
 			clientlog.Drop("vpn: udp channel %d failed: %v", i, err)
 			m.Close()
@@ -129,6 +189,11 @@ func (m *udpMux) Close() {
 			_ = c.Close()
 		}
 	}
+	if m.quicClose != nil {
+		m.quicClose()
+		m.quicClose = nil
+	}
+	m.quicConn = nil
 }
 
 func (m *udpMux) register(k udpAssocKey, a *udpAssoc) {
@@ -171,16 +236,17 @@ func (m *udpMux) dispatch(f protocol.UDPFrame) {
 }
 
 type udpChan struct {
-	conn   net.Conn
-	r      *bufio.Reader
-	w      *bufio.Writer
-	maxPad int
-	mu     sync.Mutex
-	stop   chan struct{}
-	cb     func(protocol.UDPFrame)
+	conn     net.Conn
+	r        *bufio.Reader
+	w        *bufio.Writer
+	maxPad   int
+	mu       sync.Mutex
+	stopOnce sync.Once
+	stop     chan struct{}
+	cb       func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions, transport, quicServer string) (*udpChan, error) {
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -260,7 +326,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			last = err
 			continue
 		}
-		clientlog.Traffic("vpn: udp channel %d uses server %s", id, a)
+		clientlog.Traffic("vpn: udp ch %d  [%s]  server=%s  %s", id, tunnel.PteravpnTunnelTag(transport, quicServer), a, pteravpnTunnelCfg(transport, quicServer))
 		go uc.readLoop()
 		return uc, nil
 	}
@@ -271,7 +337,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 }
 
 func (c *udpChan) Close() error {
-	close(c.stop)
+	c.stopOnce.Do(func() { close(c.stop) })
 	return c.conn.Close()
 }
 
@@ -317,7 +383,7 @@ func (h *handler) handleUDP(uc adapter.UDPConn) {
 	srcPort := uint16(id.RemotePort)
 	dstIP := tcpipToIP(id.LocalAddress)
 	dstPort := uint16(id.LocalPort)
-	clientlog.Traffic("vpn: udp assoc %d -> %s:%d", srcPort, dstIP.String(), dstPort)
+	clientlog.Traffic("vpn: udp assoc %d -> %s:%d  [%s]  %s", srcPort, dstIP.String(), dstPort, tunnel.PteravpnTunnelTag(h.opt.Transport, h.opt.QuicServer), pteravpnTunnelCfg(h.opt.Transport, h.opt.QuicServer))
 
 	k := udpAssocKey{SrcPort: srcPort, DstIP: dstIP.String(), DstPort: dstPort}
 	kAlt := udpAssocKey{SrcPort: dstPort, DstIP: dstIP.String(), DstPort: srcPort}
@@ -356,42 +422,20 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 		return
 	}
 
-	addr := pickAddr(h.opt.ServerAddrs, dstIP, dstPort)
-	clientlog.Traffic("vpn: tcp connect %s:%d via %s", dstIP.String(), dstPort, addr)
+	clientlog.Traffic("vpn: tun-tcp %s:%d  [%s]  %s", dstIP.String(), dstPort, tunnel.PteravpnTunnelTag(h.opt.Transport, h.opt.QuicServer), pteravpnTunnelCfg(h.opt.Transport, h.opt.QuicServer))
 
 	var sconn net.Conn
 	var r *bufio.Reader
 	slot := protocol.TimeSlot()
-	for try := 0; try < 2; try++ {
-		var err error
-		sconn, r, _, err = h.dialAndHandshakeTCP(addr, dstIP, dstPort, slot)
-		if err == nil {
-			break
-		}
-		if try == 1 {
-			if sconn != nil {
-				_ = sconn.Close()
-			}
-			clientlog.DPI("vpn: tcp connect frame failed: %v", err)
-			return
-		}
-		if sconn != nil {
-			_ = sconn.Close()
-			sconn = nil
-		}
-		msg := err.Error()
-		if !strings.Contains(msg, "aborted by the software") && !strings.Contains(msg, "broken pipe") && !strings.Contains(msg, "connection reset") {
-			if sconn != nil {
-				_ = sconn.Close()
-			}
-			clientlog.DPI("vpn: tcp connect frame failed: %v", err)
-			return
-		}
+	var err error
+	sconn, err = tunnel.Dial(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.udpMux.SharedQUICConn())
+	if err != nil {
+		clientlog.DPI("vpn: tcp connect frame failed: %v", err)
+		return
 	}
+	r = bufio.NewReaderSize(sconn, protocol.BufSizeForConn(slot))
 	defer sconn.Close()
 
-
-	
 	deadline := time.Now().Add(30 * time.Minute)
 	_ = tc.SetReadDeadline(deadline)
 	_ = tc.SetWriteDeadline(deadline)
@@ -414,64 +458,22 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	_ = tc.Close()
 	_ = sconn.Close()
 	<-done
-	clientlog.Traffic("vpn: tcp closed %s:%d", dstIP.String(), dstPort)
+	clientlog.Traffic("vpn: tun-tcp closed %s:%d  [%s]", dstIP.String(), dstPort, tunnel.PteravpnTunnelTag(h.opt.Transport, h.opt.QuicServer))
 }
 
-func (h *handler) dialAndHandshakeTCP(addr string, dstIP net.IP, dstPort uint16, slot int64) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
-	sconn, err := dialTCP(addr, h.opt.Token)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	bufSize := protocol.BufSizeForConn(slot)
-	r := bufio.NewReaderSize(sconn, bufSize)
-	w := bufio.NewWriterSize(sconn, bufSize)
-	prefixLen, junkCount, junkMin, junkMax := 0, 0, 64, 1024
-	if h.opt.Protection != nil {
-		prefixLen = h.opt.Protection.PadS1 + h.opt.Protection.PadS2 + h.opt.Protection.PadS3
-		if prefixLen > 64 {
-			prefixLen = 64
+func pteravpnTunnelCfg(transport, quicServer string) string {
+	t := strings.TrimSpace(transport)
+	qs := strings.TrimSpace(quicServer)
+	if t == "" {
+		if qs != "" {
+			return fmt.Sprintf("transport=implicit-quic quicServer=%q", qs)
 		}
-		if h.opt.Protection.JunkCount > 0 {
-			junkCount = h.opt.Protection.JunkCount
-			if h.opt.Protection.JunkMin > 0 {
-				junkMin = h.opt.Protection.JunkMin
-			}
-			if h.opt.Protection.JunkMax > junkMin {
-				junkMax = h.opt.Protection.JunkMax
-			}
-		}
-		if strings.EqualFold(h.opt.Protection.Obfuscation, "enhanced") && junkCount > 0 {
-			junkCount += 3
-			if junkCount > 12 {
-				junkCount = 12
-			}
-		}
+		return "transport=empty"
 	}
-	if junkCount == 0 {
-		junkCount, junkMin, junkMax = 2, 64, 512
+	if qs != "" {
+		return fmt.Sprintf("transport=%s quicServer=%q", t, qs)
 	}
-	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-	junkStyle, flushPolicy := "", ""
-	if h.opt.Protection != nil {
-		junkStyle, flushPolicy = h.opt.Protection.JunkStyle, h.opt.Protection.FlushPolicy
-	}
-	if err := protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, junkStyle, flushPolicy, func() { _ = w.Flush() }); err != nil {
-		return sconn, nil, nil, err
-	}
-	if !strings.EqualFold(flushPolicy, "perChunk") {
-		_ = w.Flush()
-	}
-	var optsJSON []byte
-	if h.opt.Protection != nil {
-		optsJSON, _ = json.Marshal(h.opt.Protection)
-	}
-	if err := protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, h.opt.Token, prefixLen, optsJSON, slot); err != nil {
-		return sconn, nil, nil, err
-	}
-	if err := protocol.WriteTcpConnect(w, dstIP, dstPort); err != nil {
-		return sconn, nil, nil, err
-	}
-	return sconn, r, w, nil
+	return fmt.Sprintf("transport=%s", t)
 }
 
 func dialTCP(addr string, token string) (net.Conn, error) {

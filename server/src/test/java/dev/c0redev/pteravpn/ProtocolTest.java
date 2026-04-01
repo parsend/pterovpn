@@ -152,4 +152,26 @@ class ProtocolTest {
     var got = Protocol.readUdpFrame(new ByteArrayInputStream(out.toByteArray()));
     assertEquals(0, got.payload().length);
   }
+
+  @Test
+  void serverHelloCapsRoundtrip() throws IOException {
+    var caps = new Protocol.ServerHelloCaps(
+        Protocol.CAPS_VERSION,
+        1,
+        Protocol.TRANSPORT_TCP | Protocol.TRANSPORT_QUIC,
+        Protocol.FEAT_IPV6,
+        7443,
+        8443,
+        2,
+        new byte[]{9, 8, 7});
+    var out = new ByteArrayOutputStream();
+    Protocol.writeServerHelloCaps(out, caps);
+    var got = Protocol.readServerHelloCaps(new ByteArrayInputStream(out.toByteArray()));
+    assertEquals(caps.version(), got.version());
+    assertEquals(caps.transportMask(), got.transportMask());
+    assertEquals(caps.featureBits(), got.featureBits());
+    assertEquals(caps.quicPort(), got.quicPort());
+    assertEquals(caps.tcpPortHint(), got.tcpPortHint());
+    assertArrayEquals(caps.nonce(), got.nonce());
+  }
 }

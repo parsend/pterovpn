@@ -2,6 +2,7 @@ package probe
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"testing"
 	"time"
@@ -14,6 +15,27 @@ func TestPingInvalidAddr(t *testing.T) {
 	_, err := Ping("invalid-host-noexist:9999", 100*time.Millisecond)
 	if err == nil {
 		t.Error("want error for invalid addr")
+	}
+}
+
+func TestParseProbeCapsV2(t *testing.T) {
+	var wire bytes.Buffer
+	_ = protocol.WriteServerHelloCaps(&wire, protocol.ServerHelloCaps{
+		Version:       protocol.CapsVersion,
+		LegacyIPv6:    true,
+		TransportMask: protocol.TransportTCP | protocol.TransportQUIC,
+		FeatureBits:   protocol.FeatureIPv6,
+		QuicPort:      7443,
+	})
+	ok, ipv6, caps, err := parseProbeCaps(wire.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !ipv6 || caps == nil || caps.QuicPort != 7443 {
+		t.Fatalf("bad parse ok=%v ipv6=%v caps=%+v", ok, ipv6, caps)
+	}
+	if mode := ServerModeFromCaps(caps); mode != "quic/tcp" {
+		t.Fatalf("bad mode: %s", mode)
 	}
 }
 
@@ -61,7 +83,7 @@ func TestProbePterovpnRefused(t *testing.T) {
 	addr := l.Addr().String()
 	l.Close()
 
-	ok, _, err := ProbePterovpn(addr, 100*time.Millisecond)
+	ok, _, err := ProbePterovpn(addr, "unused", 100*time.Millisecond)
 	if err == nil || ok {
 		t.Errorf("want err, got ok=%v err=%v", ok, err)
 	}
@@ -88,7 +110,7 @@ func TestProbePterovpnCloseOnBadToken(t *testing.T) {
 		}
 	}()
 
-	ok, _, err := ProbePterovpn(l.Addr().String(), time.Second)
+	ok, _, err := ProbePterovpn(l.Addr().String(), "any", time.Second)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -96,7 +118,6 @@ func TestProbePterovpnCloseOnBadToken(t *testing.T) {
 		t.Error("want ok=true when server closes after handshake")
 	}
 }
-
 
 func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
 	serverToken := "secret123"
@@ -115,12 +136,18 @@ func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
 		r := bufio.NewReader(wrapped)
 		_, err = protocol.ReadHandshakeAfterSkip(r)
 		if err != nil {
-			c.Close()
 			return
 		}
+		var plain bytes.Buffer
+		_ = protocol.WriteServerHelloCaps(&plain, protocol.ServerHelloCaps{
+			Version:       protocol.CapsVersion,
+			LegacyIPv6:    false,
+			TransportMask: protocol.TransportTCP,
+		})
+		_, _ = c.Write(plain.Bytes())
 	}()
 
-	ok, _, err := ProbePterovpn(l.Addr().String(), time.Second)
+	ok, _, err := ProbePterovpn(l.Addr().String(), serverToken, time.Second)
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -128,4 +155,3 @@ func TestProbePterovpnServerRejectsBadToken(t *testing.T) {
 		t.Error("want ok=true: server applies XOR, rejects bad token, closes")
 	}
 }
-

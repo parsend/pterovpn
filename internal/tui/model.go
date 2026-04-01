@@ -68,6 +68,7 @@ type item struct {
 	pingMs      int64
 	pterovpn    int
 	ipv6Support bool
+	serverMode  string
 }
 
 func (i item) Title() string {
@@ -108,7 +109,11 @@ func (i item) Description() string {
 	if i.ipv6Support {
 		ipv6 = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("IPv6")
 	}
-	return fmt.Sprintf("[%s] [%s]%s %s", ping, ptr, ipv6, i.cfg.Server)
+	mode := ""
+	if i.serverMode != "" {
+		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(i.serverMode)
+	}
+	return fmt.Sprintf("[%s] [%s]%s%s %s", ping, ptr, ipv6, mode, i.cfg.Server)
 }
 func (i item) FilterValue() string { return i.name + " " + i.cfg.Server }
 
@@ -126,6 +131,7 @@ type Model struct {
 	pingFailed    map[string]bool
 	pterovpnRes   map[string]int
 	cfgIPv6       map[string]bool
+	cfgMode       map[string]string
 	logBuf        *bytes.Buffer
 	logs          []string
 	logsMu        sync.Mutex
@@ -145,6 +151,7 @@ type Model struct {
 	cloudNames    []string
 	cloudGeo      map[string]geo.Info
 	cloudIPv6     map[string]bool
+	cloudMode     map[string]string
 	cloudLoading  bool
 	cloudFetchErr string
 
@@ -220,8 +227,8 @@ var (
 				MarginTop(1)
 )
 
-func NewModel(opts Opts) Model {
-	m := Model{
+func NewModel(opts Opts) *Model {
+	m := &Model{
 		opts:               opts,
 		tab:                tabHome,
 		status:             statusDisconnected,
@@ -231,6 +238,7 @@ func NewModel(opts Opts) Model {
 		pingFailed:         make(map[string]bool),
 		pterovpnRes:        make(map[string]int),
 		cfgIPv6:            make(map[string]bool),
+		cfgMode:            make(map[string]string),
 		logViewport:        viewport.New(60, 14),
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
@@ -241,6 +249,7 @@ func NewModel(opts Opts) Model {
 	m.cloudLoading = true
 	m.cloudFetchErr = ""
 	m.cloudIPv6 = make(map[string]bool)
+	m.cloudMode = make(map[string]string)
 	return m
 }
 
@@ -258,7 +267,11 @@ func (m *Model) buildItems() []list.Item {
 			pterovpn = v
 		}
 		ipv6 := m.cfgIPv6 != nil && m.cfgIPv6[m.names[i]]
-		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6}
+		mode := ""
+		if m.cfgMode != nil {
+			mode = m.cfgMode[m.names[i]]
+		}
+		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6, serverMode: mode}
 	}
 	return items
 }
@@ -324,7 +337,11 @@ func (m *Model) buildCloudItems() []list.Item {
 			}
 		}
 		ipv6Support := m.cloudIPv6 != nil && m.cloudIPv6[m.cloudNames[i]]
-		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6Support}
+		mode := ""
+		if m.cloudMode != nil {
+			mode = m.cloudMode[m.cloudNames[i]]
+		}
+		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6Support, serverMode: mode}
 	}
 	return items
 }
@@ -362,7 +379,7 @@ func (m *Model) refreshCloudItems() {
 }
 
 func newAddInputs() []textinput.Model {
-	return newInputsWithValues("", "", "", "", "")
+	return newInputsWithValues("", "", "", "", "", "", "", "", "", "")
 }
 
 func newProtectionInputs(opts config.ProtectionOptions) []textinput.Model {
@@ -510,20 +527,93 @@ func fillConnectionFromAnyField(inputs []textinput.Model) []textinput.Model {
 	return inputs
 }
 
-func newInputsWithValues(name, connection, routes, exclude, tunCIDR6 string) []textinput.Model {
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+func newInputsWithValues(name, connection, routes, exclude, tunCIDR6, transport, quicServer, quicServerName, quicSkipVerify, quicCertPin string) []textinput.Model {
 	ti := func(pl, val string) textinput.Model {
 		t := textinput.New()
 		t.Placeholder = pl
 		t.SetValue(val)
 		return t
 	}
+	tr := strings.TrimSpace(transport)
+	if tr == "" {
+		tr = "auto"
+	}
+	skip := strings.TrimSpace(quicSkipVerify)
 	return []textinput.Model{
 		ti("имя", name),
 		ti("host:port:key", connection),
 		ti("routes (пусто=all)", routes),
 		ti("exclude", exclude),
 		ti("tun-cidr6 (fd00:.../64)", tunCIDR6),
+		ti("transport tcp|quic|auto пусто=QUIC если quicServer", tr),
+		ti("quic host:port (пусто = только TCP)", quicServer),
+		ti("quic SNI (пусто = из адреса)", quicServerName),
+		ti("skipVerify пусто|true=self-signed ok, false=CA only", skip),
+		ti("quic pin sha256 hex (пусто = без pin)", quicCertPin),
 	}
+}
+
+var cfgFormLabels = []string{
+	"Имя:",
+	"Connection (host:port:key):",
+	"Routes:",
+	"Exclude:",
+	"TUN IPv6 CIDR:",
+	"Transport (tcp|quic|auto|пусто+quic):",
+	"QUIC server (host:port):",
+	"QUIC SNI:",
+	"QUIC skipVerify:",
+	"QUIC cert pin:",
+}
+
+func configFromConnFormInputs(inputs []textinput.Model) (config.Config, string) {
+	if len(inputs) < 10 {
+		return config.Config{}, "форма конфига сломана"
+	}
+	server, token, ok := config.ParseConnection(strings.TrimSpace(inputs[1].Value()))
+	if !ok {
+		return config.Config{}, "connection: host:port:key"
+	}
+	tr := strings.ToLower(strings.TrimSpace(inputs[5].Value()))
+	if tr == "auto" {
+		tr = ""
+	} else if tr != "" && tr != "tcp" && tr != "quic" {
+		return config.Config{}, "transport: tcp, quic, auto или пусто"
+	}
+	pin := strings.TrimSpace(strings.ReplaceAll(inputs[9].Value(), ":", ""))
+	var skipPtr *bool
+	switch strings.ToLower(strings.TrimSpace(inputs[8].Value())) {
+	case "":
+		skipPtr = nil
+	case "true":
+		v := true
+		skipPtr = &v
+	case "false":
+		v := false
+		skipPtr = &v
+	default:
+		return config.Config{}, "quic skipVerify: пусто, true или false"
+	}
+	out := config.Config{
+		Server:            server,
+		Token:             token,
+		Routes:            strings.TrimSpace(inputs[2].Value()),
+		Exclude:           strings.TrimSpace(inputs[3].Value()),
+		TunCIDR6:          strings.TrimSpace(inputs[4].Value()),
+		Transport:         tr,
+		QuicServer:        strings.TrimSpace(inputs[6].Value()),
+		QuicServerName:    strings.TrimSpace(inputs[7].Value()),
+		QuicCertPinSHA256: pin,
+	}
+	out.QuicSkipVerify = skipPtr
+	return out, ""
 }
 
 type connectedMsg struct{ stop func() }
@@ -541,6 +631,7 @@ type pterovpnResultMsg struct {
 	ok   bool
 	err  bool
 	ipv6 bool
+	mode string
 }
 
 type cloudFetchedMsg struct {
@@ -634,13 +725,13 @@ func runPing(addr, name string) tea.Cmd {
 	}
 }
 
-func runProbePterovpn(addr, name string) tea.Cmd {
+func runProbePterovpn(addr, wireToken, name string) tea.Cmd {
 	return func() tea.Msg {
-		ok, ipv6, err := probe.ProbePterovpn(addr, probeTimeout)
+		ok, ipv6, caps, err := probe.ProbePterovpnWithCaps(addr, wireToken, probeTimeout)
 		if err != nil {
-			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false}
+			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false, mode: ""}
 		}
-		return pterovpnResultMsg{name: name, ok: ok, err: false, ipv6: ipv6}
+		return pterovpnResultMsg{name: name, ok: ok, err: false, ipv6: ipv6, mode: probe.ServerModeFromCaps(caps)}
 	}
 }
 
@@ -661,7 +752,7 @@ func runProbeAll(cfgs []config.Config, names []string) tea.Cmd {
 	}
 	cmds := make([]tea.Cmd, len(cfgs))
 	for i := range cfgs {
-		cmds[i] = runProbePterovpn(cfgs[i].Server, names[i])
+		cmds[i] = runProbePterovpn(cfgs[i].Server, cfgs[i].Token, names[i])
 	}
 	return tea.Batch(cmds...)
 }
@@ -670,7 +761,7 @@ func autoProbeCmds(cfgs []config.Config, names []string) tea.Cmd {
 	return tea.Batch(runPingAll(cfgs, names), runProbeAll(cfgs, names))
 }
 
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{autoProbeCmds(m.cfgs, m.names), runCheckUpdate(m.opts.Version), runFetchCloud()}
 	if len(m.cloudCfgs) > 0 {
 		cmds = append(cmds, runGeoFetches(m.cloudCfgs))
@@ -678,7 +769,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -758,13 +849,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					idx = 0
 				}
 				if idx < len(m.cfgs) {
-					return m, runProbePterovpn(m.cfgs[idx].Server, m.names[idx])
+					return m, runProbePterovpn(m.cfgs[idx].Server, m.cfgs[idx].Token, m.names[idx])
 				}
 			}
 			if m.tab == tabCloud && !m.cloudLoading && len(m.cloudCfgs) > 0 {
 				idx := m.cloudList.Index()
 				if idx >= 0 && idx < len(m.cloudCfgs) {
-					return m, runProbePterovpn(m.cloudCfgs[idx].Server, m.cloudNames[idx])
+					return m, runProbePterovpn(m.cloudCfgs[idx].Server, m.cloudCfgs[idx].Token, m.cloudNames[idx])
 				}
 			}
 		case "u", "U":
@@ -822,7 +913,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editing = true
 					m.editingName = m.cloudNames[idx]
 					cfg := m.cloudCfgs[idx]
-					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
+					m.editInputs = newInputsWithValues(m.cloudNames[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6,
+						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -851,7 +943,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.editing = true
 					m.editingName = m.names[idx]
 					cfg := m.cfgs[idx]
-					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6)
+					m.editInputs = newInputsWithValues(m.names[idx], cfg.Server+":"+cfg.Token, cfg.Routes, cfg.Exclude, cfg.TunCIDR6,
+						cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyFormField(), cfg.QuicCertPinSHA256)
 					m.editFocus = 0
 					m.editInputs[0].Focus()
 					m.err = ""
@@ -1027,21 +1120,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					oldName := m.editingName
 					newName := config.SanitizeName(strings.TrimSpace(m.editInputs[0].Value()))
-					conn := strings.TrimSpace(m.editInputs[1].Value())
 					if newName == "" {
 						newName = "default"
 					}
-					server, token, ok := config.ParseConnection(conn)
-					if !ok {
-						m.err = "connection: host:port:key"
+					cfg, formErr := configFromConnFormInputs(m.editInputs)
+					if formErr != "" {
+						m.err = formErr
 					} else {
-						cfg := config.Config{
-							Server:   server,
-							Token:    token,
-							Routes:   strings.TrimSpace(m.editInputs[2].Value()),
-							Exclude:  strings.TrimSpace(m.editInputs[3].Value()),
-							TunCIDR6: strings.TrimSpace(m.editInputs[4].Value()),
-						}
 						if newName != oldName {
 							_ = config.Delete(oldName)
 						}
@@ -1070,20 +1155,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				} else {
 					name := config.SanitizeName(strings.TrimSpace(m.addInputs[0].Value()))
-					conn := strings.TrimSpace(m.addInputs[1].Value())
 					if name == "" {
 						name = "default"
 					}
-					server, token, ok := config.ParseConnection(conn)
-					if !ok {
-						m.err = "connection: host:port:key"
-					} else if err := config.Save(name, config.Config{
-						Server:   server,
-						Token:    token,
-						Routes:   strings.TrimSpace(m.addInputs[2].Value()),
-						Exclude:  strings.TrimSpace(m.addInputs[3].Value()),
-						TunCIDR6: strings.TrimSpace(m.addInputs[4].Value()),
-					}); err != nil {
+					cfg, formErr := configFromConnFormInputs(m.addInputs)
+					if formErr != "" {
+						m.err = formErr
+					} else if err := config.Save(name, cfg); err != nil {
 						m.err = err.Error()
 					} else {
 						m.reloadCfgs()
@@ -1140,6 +1218,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							saved.Server == cfg.Server && saved.Token == cfg.Token {
 							cfg = saved
 						}
+						mode := ""
+						if m.cloudMode != nil {
+							mode = m.cloudMode[m.cloudNames[idx]]
+						}
+						probeV6 := m.cloudIPv6 != nil && m.cloudIPv6[m.cloudNames[idx]]
+						config.ApplyCloudConnectDefaults(&cfg, mode, probeV6)
 						return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
 					}
 				}
@@ -1218,6 +1302,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cloudIPv6 = make(map[string]bool)
 		}
 		m.cloudIPv6[msg.name] = msg.ipv6
+		if m.cfgMode == nil {
+			m.cfgMode = make(map[string]string)
+		}
+		m.cfgMode[msg.name] = msg.mode
+		if m.cloudMode == nil {
+			m.cloudMode = make(map[string]string)
+		}
+		m.cloudMode[msg.name] = msg.mode
 		m.refreshCfgItems()
 		m.refreshCloudItems()
 		return m, nil
@@ -1304,7 +1396,7 @@ func waitConnect(cfg config.Config, configName string, reconnectCount int, setti
 
 const protectionAnalyticsLimit = 20
 
-func (m Model) protectionView() string {
+func (m *Model) protectionView() string {
 	var b strings.Builder
 
 	b.WriteString(sectionTitle.Render("Аналитика") + "\n")
@@ -1432,7 +1524,7 @@ func formatRTT(d time.Duration) string {
 	return d.Round(time.Millisecond).String()
 }
 
-func (m Model) View() string {
+func (m *Model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("pteravpn  dev - c0redev(unitdevgcc)"))
 	if m.updateAvailable != "" {
@@ -1529,9 +1621,12 @@ func (m Model) View() string {
 			content.WriteString("Удалить конфигурацию \"" + m.deletingCfg + "\"? y/n")
 		} else if m.editing {
 			content.WriteString("Редактирование: " + m.editingName + "\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
 			for i := range m.editInputs {
-				content.WriteString(labels[i] + " ")
+				lbl := ""
+				if i < len(cfgFormLabels) {
+					lbl = cfgFormLabels[i]
+				}
+				content.WriteString(lbl + " ")
 				content.WriteString(m.editInputs[i].View())
 				content.WriteString("\n")
 			}
@@ -1542,9 +1637,12 @@ func (m Model) View() string {
 			}
 		} else if m.adding {
 			content.WriteString("Новая конфигурация\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
 			for i := range m.addInputs {
-				content.WriteString(labels[i] + " ")
+				lbl := ""
+				if i < len(cfgFormLabels) {
+					lbl = cfgFormLabels[i]
+				}
+				content.WriteString(lbl + " ")
 				content.WriteString(m.addInputs[i].View())
 				content.WriteString("\n")
 			}
@@ -1576,9 +1674,12 @@ func (m Model) View() string {
 	case tabCloud:
 		if m.editing {
 			content.WriteString("Редактирование (cloud): " + m.editingName + "\n\n")
-			labels := []string{"Имя:", "Connection (host:port:key):", "Routes:", "Exclude:", "TUN IPv6 CIDR:"}
 			for i := range m.editInputs {
-				content.WriteString(labels[i] + " ")
+				lbl := ""
+				if i < len(cfgFormLabels) {
+					lbl = cfgFormLabels[i]
+				}
+				content.WriteString(lbl + " ")
 				content.WriteString(m.editInputs[i].View())
 				content.WriteString("\n")
 			}

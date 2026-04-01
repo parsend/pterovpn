@@ -32,3 +32,42 @@ func TestPickAddrSingle(t *testing.T) {
 		t.Errorf("single addr: got %s", addr)
 	}
 }
+
+func TestResolveQUICDialAddr(t *testing.T) {
+	a, d, err := ResolveQUICDialAddr([]string{"10.0.0.1:26771"}, "")
+	if err != nil || !d || a != "10.0.0.1:"+DefaultQUICPort {
+		t.Fatalf("derived: got %q %v %v", a, d, err)
+	}
+	a, d, err = ResolveQUICDialAddr([]string{"10.0.0.1:26771"}, "10.0.0.1:9443")
+	if err != nil || d || a != "10.0.0.1:9443" {
+		t.Fatalf("explicit: got %q %v %v", a, d, err)
+	}
+	a, d, err = ResolveQUICDialAddr([]string{"10.0.0.1:26771"}, "z.example")
+	if err != nil || !d || a != "z.example:"+DefaultQUICPort {
+		t.Fatalf("host only: got %q %v %v", a, d, err)
+	}
+}
+
+func TestUsesQUICTransport(t *testing.T) {
+	qs := "h:4433"
+	cases := []struct {
+		tr, qs string
+		want   bool
+	}{
+		{"quic", "", true},
+		{"quic", qs, true},
+		{"tcp", qs, false},
+		{"tcp", "", false},
+		{"auto", qs, true},
+		{"auto", "", false},
+		{"AUTO", qs, true},
+		{"", qs, true},
+		{"", "", false},
+		{"  ", qs, true},
+	}
+	for _, tc := range cases {
+		if g := UsesQUICTransport(tc.tr, tc.qs); g != tc.want {
+			t.Errorf("UsesQUICTransport(%q,%q)=%v want %v", tc.tr, tc.qs, g, tc.want)
+		}
+	}
+}

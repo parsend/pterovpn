@@ -12,13 +12,16 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 )
 
-func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions) error {
+func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string) error {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
 	clientlog.Info("proxy: listening on %s", listenAddr)
+	if tunnel.QUICTraceEnabled() {
+		clientlog.Info("proxy: QUIC trace on (quicTraceLog в конфиге VPN или PTERA_QUIC_TRACE=1)")
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -34,11 +37,11 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 			clientlog.Err("proxy: accept: %v", err)
 			continue
 		}
-		go handleSOCKS5(conn, serverAddrs, token, prot)
+		go handleSOCKS5(conn, serverAddrs, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256)
 	}
 }
 
-func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *config.ProtectionOptions) {
+func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string) {
 	defer client.Close()
 
 	buf := make([]byte, 257)
@@ -118,7 +121,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 		}
 	}
 
-	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot)
+	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, nil)
 	if err != nil {
 		clientlog.DPI("proxy: tunnel %s:%d: %v", host, port, err)
 		reply(client, 1)

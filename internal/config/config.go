@@ -7,13 +7,22 @@ import (
 	"strings"
 )
 
+const DefaultCloudTunCIDR6 = "fd00:13:37::2/64"
+
 type Config struct {
-	Server     string             `json:"server"`
-	Token      string             `json:"token"`
-	Routes     string             `json:"routes,omitempty"`
-	Exclude    string             `json:"exclude,omitempty"`
-	TunCIDR6   string             `json:"tunCIDR6,omitempty"`
-	Protection *ProtectionOptions `json:"protection,omitempty"`
+	Server            string `json:"server"`
+	QuicServer        string `json:"quicServer,omitempty"`
+	Token             string `json:"token"`
+	Transport         string `json:"transport,omitempty"`
+	QuicServerName    string `json:"quicServerName,omitempty"`
+	QuicSkipVerify    *bool  `json:"quicSkipVerify,omitempty"`
+	QuicCertPinSHA256 string `json:"quicCertPinSHA256,omitempty"`
+
+	QuicTraceLog bool               `json:"quicTraceLog,omitempty"`
+	Routes       string             `json:"routes,omitempty"`
+	Exclude      string             `json:"exclude,omitempty"`
+	TunCIDR6     string             `json:"tunCIDR6,omitempty"`
+	Protection   *ProtectionOptions `json:"protection,omitempty"`
 }
 
 type ProtectionOptions struct {
@@ -26,9 +35,9 @@ type ProtectionOptions struct {
 	PadS3       int    `json:"padS3,omitempty"`
 	PadS4       int    `json:"padS4,omitempty"`
 	PreCheck    bool   `json:"preCheck,omitempty"`
-	MagicSplit  string `json:"magicSplit,omitempty"`   // "2,3" etc, sum=5
-	JunkStyle   string `json:"junkStyle,omitempty"`    // "random"|"tls"
-	FlushPolicy string `json:"flushPolicy,omitempty"`  // "once"|"perChunk"
+	MagicSplit  string `json:"magicSplit,omitempty"`
+	JunkStyle   string `json:"junkStyle,omitempty"`
+	FlushPolicy string `json:"flushPolicy,omitempty"`
 }
 
 func Dir() (string, error) {
@@ -80,6 +89,51 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+func (c Config) QuicSkipVerifyEffective() bool {
+	if c.QuicSkipVerify == nil {
+		return true
+	}
+	return *c.QuicSkipVerify
+}
+
+func (c Config) QuicSkipVerifyFormField() string {
+	if c.QuicSkipVerify == nil {
+		return ""
+	}
+	if *c.QuicSkipVerify {
+		return "true"
+	}
+	return "false"
+}
+
+func ApplyCloudConnectDefaults(cfg *Config, serverMode string, probeIPv6 bool) {
+	if strings.TrimSpace(cfg.QuicCertPinSHA256) == "" {
+		cfg.QuicSkipVerify = nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(serverMode))
+	forcedTCP := strings.EqualFold(strings.TrimSpace(cfg.Transport), "tcp")
+	if forcedTCP {
+		cfg.QuicServer = ""
+	} else {
+		switch mode {
+		case "tcp only":
+			cfg.Transport = "tcp"
+			cfg.QuicServer = ""
+		case "quic only", "quic/tcp":
+			if strings.TrimSpace(cfg.QuicServer) == "" {
+				cfg.QuicServer = cfg.Server
+			}
+		default:
+			if strings.TrimSpace(cfg.QuicServer) == "" {
+				cfg.QuicServer = cfg.Server
+			}
+		}
+	}
+	if strings.TrimSpace(cfg.TunCIDR6) == "" && probeIPv6 {
+		cfg.TunCIDR6 = DefaultCloudTunCIDR6
+	}
 }
 
 func Save(name string, c Config) error {

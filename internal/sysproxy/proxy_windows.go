@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	keyPath  = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
-	proxyKey = "ProxyServer"
+	keyPath   = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+	proxyKey  = "ProxyServer"
 	enableKey = "ProxyEnable"
 )
 

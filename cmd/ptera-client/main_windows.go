@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
@@ -21,9 +22,27 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/proxy"
 	"github.com/unitdevgcc/pterovpn/internal/sysproxy"
 	"github.com/unitdevgcc/pterovpn/internal/tun"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 	"github.com/unitdevgcc/pterovpn/internal/vpn"
 	"golang.org/x/text/encoding/charmap"
 )
+
+func dedupeIPsWindows(ips []net.IP) []net.IP {
+	seen := make(map[string]struct{})
+	var out []net.IP
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		k := ip.String()
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, ip)
+	}
+	return out
+}
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
 	if opts.proxy {
@@ -41,12 +60,34 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	if err != nil {
 		return err
 	}
+	bypassIPs := []net.IP{opts.serverIP}
+	if tunnel.UsesQUICTransport(opts.transport, opts.quicServer) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		extra, err := tunnel.QUICDialTargetIPs(ctx, addrs, opts.quicServer)
+		cancel()
+		if err != nil {
+			clientlog.Warn("vpn: QUIC bypass resolve: %v", err)
+		} else {
+			bypassIPs = append(bypassIPs, extra...)
+		}
+	}
+	bypassIPs = dedupeIPsWindows(bypassIPs)
+	var bypassAdded []net.IP
+	for _, ip := range bypassIPs {
+		if ip.To4() == nil {
+			continue
+		}
+		if err := netcfg.AddBypass(ip, dr); err != nil {
+			return err
+		}
+		bypassAdded = append(bypassAdded, ip)
+		clientlog.Info("bypass route for %s (metric 1), dr.Dev=%q dr.Gateway=%q", ip, dr.Dev, dr.Gateway)
+	}
+	if len(bypassAdded) == 0 && opts.serverIP.To4() != nil {
+		clientlog.Warn("warning: no IPv4 bypass routes added")
+	}
 	if opts.serverIP.To4() == nil {
-		clientlog.Warn("warning: server %s is IPv6, bypass route not added (Windows)", opts.serverIP)
-	} else if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
-		return err
-	} else {
-		clientlog.Info("bypass route for %s (metric 1), dr.Dev=%q dr.Gateway=%q", opts.serverIP, dr.Dev, dr.Gateway)
+		clientlog.Warn("warning: server %s is IPv6, Windows bypass uses IPv4 only", opts.serverIP)
 	}
 	if err := netcfg.AddExcludeRoutes(dr, opts.excludeCIDRs); err != nil {
 		return err
@@ -70,7 +111,9 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		delIPv6Routes(name, v6Routes)
 		netcfg.DelRoutesViaTun(name, v4Routes)
 		netcfg.DelExcludeRoutes(opts.excludeCIDRs)
-		netcfg.DelBypass(opts.serverIP)
+		for _, ip := range bypassAdded {
+			netcfg.DelBypass(ip)
+		}
 	}()
 
 	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -80,12 +123,18 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
-			Device:      dev,
-			MTU:         opts.mtu,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			Device:            dev,
+			MTU:               opts.mtu,
+			Token:             opts.token,
+			ServerAddrs:       addrs,
+			Transport:         opts.transport,
+			QuicServer:        opts.quicServer,
+			QuicServerName:    opts.quicServerName,
+			QuicSkipVerify:    opts.quicSkipVerify,
+			QuicCertPinSHA256: opts.quicCertPinSHA256,
+			QuicTraceLog:      opts.quicTraceLog,
+			Ready:             func() { close(ready) },
+			Protection:        opts.protection,
 		})
 	}()
 
@@ -213,11 +262,12 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 		}
 		defer sysproxy.Clear()
 	}
-		clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
+	clientlog.Info("proxy mode: listening on %s", opts.proxyListen)
 	if onReady != nil {
 		onReady()
 	}
-	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+	tunnel.SetQUICTrace(opts.quicTraceLog)
+	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection, opts.transport, opts.quicServer, opts.quicServerName, opts.quicSkipVerify, opts.quicCertPinSHA256)
 }
 
 func parseCIDR(cidr string) (ip, prefixLen string, err error) {
@@ -233,7 +283,7 @@ func parseCIDR(cidr string) (ip, prefixLen string, err error) {
 	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
 		return "", "", errors.New("tun cidr must be ipv4 (use -tun-cidr6 for ipv6)")
 	}
-	
+
 	if n, e := strconv.Atoi(prefixLen); e == nil {
 		if n < 0 {
 			prefixLen = "0"

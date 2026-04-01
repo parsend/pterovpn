@@ -10,7 +10,7 @@ import java.net.SocketTimeoutException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.Optional;
+import java.security.SecureRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.logging.Logger;
 
@@ -18,6 +18,9 @@ final class ConnectionHandler implements Runnable {
 
     private static final Logger log = Log.logger(ConnectionHandler.class);
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
+    private static final SecureRandom HELLO_RND = new SecureRandom();
+    
+    private static final String PROBE_HANDSHAKE_TOKEN = "probe-bad-token";
 
     private final Socket sock;
     private final Config cfg;
@@ -52,45 +55,32 @@ final class ConnectionHandler implements Runnable {
                     hs.token().getBytes(StandardCharsets.UTF_8)
                 )
             ) {
-                log.warning("bad token from " + s.getRemoteSocketAddress());
-                sendCapabilityByte(rawOut);
+                if (PROBE_HANDSHAKE_TOKEN.equals(hs.token())) {
+                    log.info("probe handshake (caps read) from " + s.getRemoteSocketAddress());
+                } else {
+                    log.warning("bad token from " + s.getRemoteSocketAddress());
+                }
+                sendCapability(rawOut);
                 throw new IOException("bad token");
             }
             OutputStream out = xor.wrapOutput(rawOut);
-            log.info(
-                "Accepted role=" +
-                    hs.role() +
-                    " from " +
-                    s.getRemoteSocketAddress()
-            );
-
-            if (hs.role() == Protocol.ROLE_UDP) {
-                s.setSoTimeout(0);
-                streamPool.submit(() -> {
-                    try {
-                        handleUdp(hs.channelId(), in, out, hr.opts());
-                    } catch (IOException e) {
-                        log.fine("udp role ended: " + e.getMessage());
-                    }
-                });
-                handedOff = true;
-                return;
-            }
-            if (hs.role() == Protocol.ROLE_TCP) {
-                handleTcp(in, s, xor);
-                handedOff = true;
-                return;
-            }
-            log.warning("unknown role " + hs.role() + " from " + s.getRemoteSocketAddress());
-            throw new IOException("bad role");
+            s.setSoTimeout(0);
+            var session = new SessionHandler(cfg, udp, String.valueOf(s.getRemoteSocketAddress()), () -> {
+                try {
+                    s.close();
+                } catch (IOException ignored) {}
+            });
+            session.handle(hs, hr, in, out, (connect, rest) -> handleTcp(connect, rest, s, xor), streamPool);
+            handedOff = true;
+            return;
         } catch (EOFException ignored) {
-            sendCapabilityByte(rawOut);
+            sendCapability(rawOut);
         } catch (SocketTimeoutException e) {
             log.warning("handshake timeout from " + s.getRemoteSocketAddress() + " after " + HANDSHAKE_TIMEOUT_MS + "ms");
-            sendCapabilityByte(rawOut);
+            sendCapability(rawOut);
         } catch (IOException e) {
             log.fine("conn closed: " + e.getMessage());
-            sendCapabilityByte(rawOut);
+            sendCapability(rawOut);
         } finally {
             if (!handedOff) {
                 try {
@@ -100,42 +90,31 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private static void sendCapabilityByte(OutputStream rawOut) {
+    private void sendCapability(OutputStream rawOut) {
         if (rawOut == null) return;
         try {
-            rawOut.write(Ipv6Detect.hasIPv6() ? 1 : 0);
-            rawOut.flush();
+            int legacyIpv6 = Ipv6Detect.hasIPv6() ? 1 : 0;
+            int transportMask = 0;
+            if (cfg.tcpEnabled()) transportMask |= Protocol.TRANSPORT_TCP;
+            if (cfg.quicEnabled()) transportMask |= Protocol.TRANSPORT_QUIC;
+            int featureBits = legacyIpv6 == 1 ? Protocol.FEAT_IPV6 : 0;
+            int tcpPortHint = cfg.listenPorts().isEmpty() ? 0 : cfg.listenPorts().get(0);
+            byte[] nonce = new byte[8];
+            HELLO_RND.nextBytes(nonce);
+            Protocol.writeServerHelloCaps(rawOut, new Protocol.ServerHelloCaps(
+                Protocol.CAPS_VERSION,
+                legacyIpv6,
+                transportMask,
+                featureBits,
+                cfg.quicEnabled() ? cfg.quicListenPort() : 0,
+                tcpPortHint,
+                0,
+                nonce
+            ));
         } catch (Throwable ignored) {}
     }
 
-    private void handleUdp(int channelId, InputStream in, OutputStream out, Optional<Protocol.ClientOptions> opts)
-        throws IOException {
-        UdpSessions.UdpChannelWriter writer = udp.createWriter(out, opts.orElse(null));
-        try {
-            if (
-                channelId < 0 || channelId >= cfg.udpChannels()
-            ) throw new IOException("bad udp channel");
-            log.info(
-                "UDP channel " +
-                    channelId +
-                    " registered from " +
-                    sock.getRemoteSocketAddress()
-            );
-            while (true) {
-                Protocol.UdpFrame f = Protocol.readUdpFrame(in);
-                udp.onFrame(writer, channelId, f);
-            }
-        } finally {
-            udp.removeWriter(writer);
-            try {
-                sock.close();
-            } catch (IOException ignored) {
-            }
-        }
-    }
-
-    private void handleTcp(InputStream in, Socket s, XorStream xor) throws IOException {
-        Protocol.TcpConnect c = Protocol.readTcpConnect(in);
+    private void handleTcp(Protocol.TcpConnect c, InputStream in, Socket s, XorStream xor) throws IOException {
         log.info("TCP connect to " + c.ip().getHostAddress() + ":" + c.port());
         if (tcpPool == null) {
             throw new IOException("tcp reactor unavailable");

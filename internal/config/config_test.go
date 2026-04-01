@@ -1,10 +1,34 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestQuicSkipVerifyJSONOmitMeansLax(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"server":"h:1","token":"t"}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.QuicSkipVerify != nil {
+		t.Fatalf("want nil, got %#v", c.QuicSkipVerify)
+	}
+	if !c.QuicSkipVerifyEffective() {
+		t.Error("missing quicSkipVerify must default to lax QUIC")
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	if !c.QuicSkipVerifyEffective() {
+		t.Error("round-trip without key stays lax")
+	}
+}
 
 func TestSaveLoadDelete(t *testing.T) {
 	dir := t.TempDir()

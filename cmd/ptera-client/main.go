@@ -15,18 +15,24 @@ import (
 var version = "dev"
 
 type runOpts struct {
-	serverIP     net.IP
-	token        string
-	tunName      string
-	tunCIDR      string
-	tunCIDR6     string
-	mtu          int
-	routeCIDRs   []*net.IPNet
-	excludeCIDRs []*net.IPNet
-	protection   *config.ProtectionOptions
-	proxy        bool
-	proxyListen  string
-	systemProxy  bool
+	serverIP          net.IP
+	token             string
+	transport         string
+	quicServer        string
+	quicServerName    string
+	quicSkipVerify    bool
+	quicCertPinSHA256 string
+	quicTraceLog      bool
+	tunName           string
+	tunCIDR           string
+	tunCIDR6          string
+	mtu               int
+	routeCIDRs        []*net.IPNet
+	excludeCIDRs      []*net.IPNet
+	protection        *config.ProtectionOptions
+	proxy             bool
+	proxyListen       string
+	systemProxy       bool
 }
 
 func main() {
@@ -38,19 +44,25 @@ func main() {
 
 func run() error {
 	var (
-		tui         = flag.Bool("tui", false, "run TUI")
-		server      = flag.String("server", "", "host:port or host")
-		ports       = flag.String("ports", "", "csv ports for multiport")
-		token       = flag.String("token", "", "token")
-		tunName     = flag.String("tun", "ptera0", "tun name")
-		tunCIDR     = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
-		tunCIDR6    = flag.String("tun-cidr6", "", "ipv6 tun cidr (e.g. fd00:13:37::2/64)")
-		mtu         = flag.Int("mtu", 1420, "mtu")
-		routes      = flag.String("routes", "", "cidrs to route via tunnel (default=all)")
-		exclude     = flag.String("exclude", "", "cidrs to exclude from tunnel")
-		proxy       = flag.Bool("proxy", false, "run SOCKS5 proxy instead of TUN (Windows fallback)")
-		proxyListen = flag.String("proxy-listen", "127.0.0.1:1080", "proxy listen addr")
-		systemProxy = flag.Bool("system-proxy", false, "set Windows system proxy (Windows only)")
+		tui            = flag.Bool("tui", false, "run TUI")
+		server         = flag.String("server", "", "host:port or host")
+		ports          = flag.String("ports", "", "csv ports for multiport")
+		token          = flag.String("token", "", "token")
+		transport      = flag.String("transport", "auto", "transport: auto|tcp|quic")
+		quicServer     = flag.String("quic-server", "", "QUIC server host:port")
+		quicServerName = flag.String("quic-server-name", "", "SNI/server name for QUIC TLS")
+		quicSkipVerify = flag.Bool("quic-skip-verify", true, "QUIC TLS, default accept self-signed; false = system CA only")
+		quicCertPin    = flag.String("quic-cert-pin", "", "SHA256 pin of QUIC leaf cert")
+		quicTrace      = flag.Bool("quic-trace", false, "verbose QUIC dial logging (or env PTERA_QUIC_TRACE=1)")
+		tunName        = flag.String("tun", "ptera0", "tun name")
+		tunCIDR        = flag.String("tun-cidr", "10.13.37.2/24", "tun cidr")
+		tunCIDR6       = flag.String("tun-cidr6", "", "ipv6 tun cidr (e.g. fd00:13:37::2/64)")
+		mtu            = flag.Int("mtu", 1420, "mtu")
+		routes         = flag.String("routes", "", "cidrs to route via tunnel (default=all)")
+		exclude        = flag.String("exclude", "", "cidrs to exclude from tunnel")
+		proxy          = flag.Bool("proxy", false, "run SOCKS5 proxy instead of TUN (Windows fallback)")
+		proxyListen    = flag.String("proxy-listen", "127.0.0.1:1080", "proxy listen addr")
+		systemProxy    = flag.Bool("system-proxy", false, "set Windows system proxy (Windows only)")
 	)
 	flag.Parse()
 
@@ -92,18 +104,24 @@ func run() error {
 
 	prot, _ := config.LoadProtection()
 	opts := runOpts{
-		serverIP:     sip,
-		token:        *token,
-		tunName:      *tunName,
-		tunCIDR:      *tunCIDR,
-		tunCIDR6:     *tunCIDR6,
-		mtu:          *mtu,
-		routeCIDRs:   routeCIDRs,
-		excludeCIDRs: excludeCIDRs,
-		protection:   &prot,
-		proxy:       *proxy,
-		proxyListen: *proxyListen,
-		systemProxy: *systemProxy,
+		serverIP:          sip,
+		token:             *token,
+		transport:         *transport,
+		quicServer:        *quicServer,
+		quicServerName:    *quicServerName,
+		quicSkipVerify:    *quicSkipVerify,
+		quicCertPinSHA256: *quicCertPin,
+		quicTraceLog:      *quicTrace,
+		tunName:           *tunName,
+		tunCIDR:           *tunCIDR,
+		tunCIDR6:          *tunCIDR6,
+		mtu:               *mtu,
+		routeCIDRs:        routeCIDRs,
+		excludeCIDRs:      excludeCIDRs,
+		protection:        &prot,
+		proxy:             *proxy,
+		proxyListen:       *proxyListen,
+		systemProxy:       *systemProxy,
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
 }

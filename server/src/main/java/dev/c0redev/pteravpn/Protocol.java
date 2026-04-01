@@ -22,6 +22,11 @@ final class Protocol {
   static final int MAX_FRAME = 64 * 1024 + 64;
   static final int MAX_PAD = 32;
   static final int MAX_OPTS = 512;
+  static final int MAX_HELLO_CAPS_NONCE = 32;
+  static final int CAPS_VERSION = 1;
+  static final int TRANSPORT_TCP = 1;
+  static final int TRANSPORT_QUIC = 1 << 1;
+  static final int FEAT_IPV6 = 1;
 
   static record HandshakeResult(Handshake handshake, Optional<ClientOptions> opts) {}
 
@@ -189,9 +194,55 @@ final class Protocol {
     out.write(v & 0xff);
   }
 
+  static void writeServerHelloCaps(OutputStream out, ServerHelloCaps caps) throws IOException {
+    out.write(caps.version() & 0xff);
+    out.write(caps.legacyIpv6() & 0xff);
+    out.write(caps.transportMask() & 0xff);
+    writeU16(out, caps.featureBits());
+    writeU16(out, caps.quicPort());
+    writeU16(out, caps.tcpPortHint());
+    out.write(caps.obfsProfileId() & 0xff);
+    int nonceLen = caps.nonce() == null ? 0 : caps.nonce().length;
+    if (nonceLen > MAX_HELLO_CAPS_NONCE) throw new IOException("caps nonce too long");
+    out.write(nonceLen & 0xff);
+    if (nonceLen > 0) out.write(caps.nonce());
+    out.flush();
+  }
+
+  static ServerHelloCaps readServerHelloCaps(InputStream in) throws IOException {
+    int version = readU8(in);
+    int legacyIpv6 = readU8(in);
+    int transportMask = readU8(in);
+    int featureBits = readU16(in);
+    int quicPort = readU16(in);
+    int tcpPortHint = readU16(in);
+    int obfsProfileId = readU8(in);
+    int nonceLen = readU8(in);
+    if (nonceLen > MAX_HELLO_CAPS_NONCE) throw new IOException("caps nonce too long");
+    byte[] nonce = nonceLen == 0 ? new byte[0] : readN(in, nonceLen);
+    return new ServerHelloCaps(
+        version,
+        legacyIpv6,
+        transportMask,
+        featureBits,
+        quicPort,
+        tcpPortHint,
+        obfsProfileId,
+        nonce);
+  }
+
   record Handshake(byte role, int channelId, String token) {}
   record TcpConnect(byte addrType, InetAddress ip, int port) {}
   record UdpFrame(byte addrType, int srcPort, InetAddress dst, int dstPort, byte[] payload) {}
+  record ServerHelloCaps(
+      int version,
+      int legacyIpv6,
+      int transportMask,
+      int featureBits,
+      int quicPort,
+      int tcpPortHint,
+      int obfsProfileId,
+      byte[] nonce) {}
 
   record ClientOptions(int padS4) {
     static Optional<ClientOptions> parse(String json) {

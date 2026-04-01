@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,7 +21,6 @@ func cloudConfigPath() (string, error) {
 	}
 	return filepath.Join(dir, cloudConfigFile), nil
 }
-
 
 func FetchCloud() ([]string, error) {
 	raw, err := fetchCloudRaw()
@@ -103,17 +103,49 @@ func parseCloudLines(s string) []string {
 	return out
 }
 
-func parseCloudLine(line string) (conn string, tunCIDR6 string) {
+func ParseCloudLineParts(line string) (conn, tunCIDR6, quicServer, transport string) {
 	line = strings.TrimSpace(line)
 	parts := strings.Fields(line)
 	if len(parts) < 1 {
-		return "", ""
+		return "", "", "", ""
 	}
 	conn = parts[0]
-	if len(parts) >= 2 {
-		tunCIDR6 = strings.TrimSpace(parts[1])
+	for _, p := range parts[1:] {
+		raw := strings.TrimSpace(p)
+		low := strings.ToLower(raw)
+		if strings.HasPrefix(low, "quic=") {
+			if i := strings.IndexByte(raw, '='); i >= 0 && i < len(raw)-1 {
+				quicServer = strings.TrimSpace(raw[i+1:])
+			}
+			continue
+		}
+		if strings.HasPrefix(low, "transport=") {
+			if i := strings.IndexByte(raw, '='); i >= 0 && i < len(raw)-1 {
+				v := strings.ToLower(strings.TrimSpace(raw[i+1:]))
+				switch v {
+				case "tcp", "quic":
+					transport = v
+				case "auto", "":
+					transport = ""
+				}
+			}
+			continue
+		}
+		if strings.Contains(raw, "/") {
+			if _, _, err := net.ParseCIDR(raw); err == nil {
+				if tunCIDR6 == "" {
+					tunCIDR6 = raw
+				}
+				continue
+			}
+		}
+		if _, _, err := net.SplitHostPort(raw); err == nil {
+			if quicServer == "" {
+				quicServer = raw
+			}
+		}
 	}
-	return conn, tunCIDR6
+	return conn, tunCIDR6, quicServer, transport
 }
 
 func CloudList(fetch bool) ([]Config, []string, error) {
@@ -137,12 +169,25 @@ func CloudList(fetch bool) ([]Config, []string, error) {
 	var cfgs []Config
 	var names []string
 	for i, line := range lines {
-		conn, tunCIDR6 := parseCloudLine(line)
+		conn, tun6, quicOpt, tr := ParseCloudLineParts(line)
 		server, token, ok := ParseConnection(conn)
 		if !ok {
 			continue
 		}
-		cfgs = append(cfgs, Config{Server: server, Token: token, TunCIDR6: tunCIDR6})
+		c := Config{
+			Server:     server,
+			Token:      token,
+			TunCIDR6:   tun6,
+			Transport:  tr,
+			QuicServer: server,
+		}
+		if q := strings.TrimSpace(quicOpt); q != "" {
+			c.QuicServer = q
+		}
+		if strings.EqualFold(strings.TrimSpace(tr), "tcp") {
+			c.QuicServer = ""
+		}
+		cfgs = append(cfgs, c)
 		names = append(names, fmt.Sprintf("cloud-%d", i+1))
 	}
 	return cfgs, names, nil

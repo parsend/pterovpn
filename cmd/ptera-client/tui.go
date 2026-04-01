@@ -107,7 +107,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	start := time.Now()
 	dnsOK := checkDNS()
 	rttBefore, _ := probe.Ping(cfg.Server, probeTimeout)
-	probeOK, _, _ := probe.ProbePterovpn(cfg.Server, probeTimeout)
+	probeOK, _, _ := probe.ProbePterovpn(cfg.Server, cfg.Token, probeTimeout)
 
 	record := metrics.SessionRecord{
 		Start:          start,
@@ -171,7 +171,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		prot = &p
 	}
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
-		ok, _, err := probe.ProbePterovpn(addrs[0], probeTimeout)
+		ok, _, err := probe.ProbePterovpn(addrs[0], cfg.Token, probeTimeout)
 		if err != nil || !ok {
 			record.ErrorType = "preCheck"
 			record.End = time.Now()
@@ -187,18 +187,24 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 	}
 	tunCIDR6 := strings.TrimSpace(cfg.TunCIDR6)
 	opts := runOpts{
-		serverIP:     sip,
-		token:        cfg.Token,
-		tunName:      "ptera0",
-		tunCIDR:      "10.13.37.2/24",
-		tunCIDR6:     tunCIDR6,
-		mtu:          1420,
-		routeCIDRs:   routeCIDRs,
-		excludeCIDRs: excludeCIDRs,
-		protection:   prot,
-		proxy:        settings.Mode == "proxy",
-		proxyListen:  settings.ProxyListen,
-		systemProxy:  settings.SystemProxy,
+		serverIP:          sip,
+		token:             cfg.Token,
+		transport:         cfg.Transport,
+		quicServer:        cfg.QuicServer,
+		quicServerName:    cfg.QuicServerName,
+		quicSkipVerify:    cfg.QuicSkipVerifyEffective(),
+		quicCertPinSHA256: cfg.QuicCertPinSHA256,
+		quicTraceLog:      cfg.QuicTraceLog,
+		tunName:           "ptera0",
+		tunCIDR:           "10.13.37.2/24",
+		tunCIDR6:          tunCIDR6,
+		mtu:               1420,
+		routeCIDRs:        routeCIDRs,
+		excludeCIDRs:      excludeCIDRs,
+		protection:        prot,
+		proxy:             settings.Mode == "proxy",
+		proxyListen:       settings.ProxyListen,
+		systemProxy:       settings.SystemProxy,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -212,6 +218,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		close(done)
 	}()
 
+	const connectTimeout = 90 * time.Second
 	select {
 	case <-ready:
 		record.HandshakeOK = true
@@ -229,6 +236,8 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		}
 		return stop, nil
 	case err := <-errCh:
+		cancel()
+		<-done
 		record.ErrorType = classifyError(err)
 		record.End = time.Now()
 		record.Duration = time.Since(start)
@@ -236,5 +245,15 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			_ = store.Append(record)
 		}
 		return nil, err
+	case <-time.After(connectTimeout):
+		cancel()
+		<-done
+		record.ErrorType = "timeout"
+		record.End = time.Now()
+		record.Duration = time.Since(start)
+		if store, loadErr := metrics.Load(); loadErr == nil {
+			_ = store.Append(record)
+		}
+		return nil, fmt.Errorf("таймаут подключения %v (часто после повторного коннекта без корректного shutdown netstack)", connectTimeout)
 	}
 }

@@ -45,3 +45,27 @@ func TestWireCompatUdpFrame(t *testing.T) {
 		t.Error("payload mismatch")
 	}
 }
+
+func TestServerHelloCapsRoundtrip(t *testing.T) {
+	caps := ServerHelloCaps{
+		Version:       CapsVersion,
+		LegacyIPv6:    true,
+		TransportMask: TransportTCP | TransportQUIC,
+		FeatureBits:   FeatureIPv6,
+		QuicPort:      7443,
+		TCPPortHint:   8443,
+		ObfsProfileID: 7,
+		Nonce:         []byte{1, 2, 3, 4},
+	}
+	var buf bytes.Buffer
+	if err := WriteServerHelloCaps(&buf, caps); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadServerHelloCaps(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != caps.Version || got.TransportMask != caps.TransportMask || got.QuicPort != caps.QuicPort || got.TCPPortHint != caps.TCPPortHint {
+		t.Fatalf("caps mismatch got=%+v want=%+v", got, caps)
+	}
+}

@@ -3,6 +3,18 @@ token=your-secret-key
 udpChannels=4
 publicHost=1.2.3.4
 debug=true
+
+# tcp-only | quic-only | both
+serverMode=tcp-only
+
+# quicListenPort=4433
+# quicCertPath=quic/auto.crt
+# quicKeyPath=quic/auto.key
+# quicAlpn=pteravpn
+# quicMaxStreams=128
+# quicMaxHandshakes=512
+# quicIdleTimeoutMs=120000
+
 update.enabled=true
 update.repo=unitdevgcc/pterovpn
 update.checkIntervalMinutes=1

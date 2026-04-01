@@ -10,15 +10,34 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
 	"github.com/unitdevgcc/pterovpn/internal/netcfg"
 	"github.com/unitdevgcc/pterovpn/internal/proxy"
 	"github.com/unitdevgcc/pterovpn/internal/tun"
+	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 	"github.com/unitdevgcc/pterovpn/internal/vpn"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 )
+
+func dedupeIPs(ips []net.IP) []net.IP {
+	seen := make(map[string]struct{})
+	var out []net.IP
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		k := ip.String()
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, ip)
+	}
+	return out
+}
 
 func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func()) error {
 	if os.Geteuid() != 0 {
@@ -31,7 +50,8 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if onReady != nil {
 			onReady()
 		}
-		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection)
+		tunnel.SetQUICTrace(opts.quicTraceLog)
+		return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection, opts.transport, opts.quicServer, opts.quicServerName, opts.quicSkipVerify, opts.quicCertPinSHA256)
 	}
 	sigCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -39,8 +59,22 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	if err != nil {
 		return err
 	}
-	if err := netcfg.AddBypass(opts.serverIP, dr); err != nil {
-		return err
+	bypassIPs := []net.IP{opts.serverIP}
+	if tunnel.UsesQUICTransport(opts.transport, opts.quicServer) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		extra, err := tunnel.QUICDialTargetIPs(ctx, addrs, opts.quicServer)
+		cancel()
+		if err != nil {
+			clientlog.Warn("vpn: QUIC bypass resolve: %v", err)
+		} else {
+			bypassIPs = append(bypassIPs, extra...)
+		}
+	}
+	bypassIPs = dedupeIPs(bypassIPs)
+	for _, ip := range bypassIPs {
+		if err := netcfg.AddBypass(ip, dr); err != nil {
+			return err
+		}
 	}
 	if err := netcfg.AddExcludeRoutes(dr, opts.excludeCIDRs); err != nil {
 		return err
@@ -48,7 +82,9 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 
 	defer func() {
 		netcfg.DelExcludeRoutes(opts.excludeCIDRs)
-		netcfg.DelBypass(opts.serverIP)
+		for _, ip := range bypassIPs {
+			netcfg.DelBypass(ip)
+		}
 	}()
 
 	createDevice := func() (device.Device, func(), error) {
@@ -90,11 +126,17 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- vpn.Run(sigCtx, vpn.Options{
-			CreateDevice: createDevice,
-			Token:       opts.token,
-			ServerAddrs: addrs,
-			Ready:       func() { close(ready) },
-			Protection:  opts.protection,
+			CreateDevice:      createDevice,
+			Token:             opts.token,
+			ServerAddrs:       addrs,
+			Transport:         opts.transport,
+			QuicServer:        opts.quicServer,
+			QuicServerName:    opts.quicServerName,
+			QuicSkipVerify:    opts.quicSkipVerify,
+			QuicCertPinSHA256: opts.quicCertPinSHA256,
+			QuicTraceLog:      opts.quicTraceLog,
+			Ready:             func() { close(ready) },
+			Protection:        opts.protection,
 		})
 	}()
 
@@ -105,7 +147,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			return err
 		}
 		if opts.tunCIDR6 != "" && len(opts.routeCIDRs) == 0 {
-			// full-tunnel ipv6 default via fd00:13:37::1 style gateway derived from tun cidr
+
 			if gw, err := deriveIPv6Gateway(opts.tunCIDR6); err == nil {
 				if err := netcfg.AddDefaultViaTun6(opts.tunName, gw, 5); err != nil {
 					return err

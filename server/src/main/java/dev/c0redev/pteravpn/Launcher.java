@@ -30,6 +30,7 @@ public final class Launcher {
     }
 
     Log.setDebug(cfg.debug());
+    Log.setQuicTrace(cfg.quicTraceLog());
     log = Log.logger(Launcher.class);
     log.info("Launcher base: " + base);
 

@@ -11,19 +11,19 @@ import (
 const maxRecords = 500
 
 type SessionRecord struct {
-	Start         time.Time     `json:"start"`
-	End           time.Time     `json:"end"`
-	Duration      time.Duration `json:"duration"`
-	Server        string        `json:"server"`
-	ConfigName    string        `json:"configName"`
-	ErrorType     string        `json:"errorType,omitempty"`
-	HandshakeOK   bool          `json:"handshakeOK"`
-	ReconnectCount int          `json:"reconnectCount"`
-	RTTBefore     time.Duration `json:"rttBefore,omitempty"`
-	RTTDuring     time.Duration `json:"rttDuring,omitempty"`
-	DNSOKBefore   bool          `json:"dnsOKBefore"`
-	DNSOKAfter    bool          `json:"dnsOKAfter"`
-	ProbeOK       bool          `json:"probeOK"`
+	Start          time.Time     `json:"start"`
+	End            time.Time     `json:"end"`
+	Duration       time.Duration `json:"duration"`
+	Server         string        `json:"server"`
+	ConfigName     string        `json:"configName"`
+	ErrorType      string        `json:"errorType,omitempty"`
+	HandshakeOK    bool          `json:"handshakeOK"`
+	ReconnectCount int           `json:"reconnectCount"`
+	RTTBefore      time.Duration `json:"rttBefore,omitempty"`
+	RTTDuring      time.Duration `json:"rttDuring,omitempty"`
+	DNSOKBefore    bool          `json:"dnsOKBefore"`
+	DNSOKAfter     bool          `json:"dnsOKAfter"`
+	ProbeOK        bool          `json:"probeOK"`
 }
 
 type Store struct {

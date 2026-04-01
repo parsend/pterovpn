@@ -1,2 +1,4 @@
+# host:port:token  [IPv6 CIDR]  [quic=host:port]  [transport=tcp|quic|auto]
+# по умолчанию transport=auto, QUIC на тот же host:port что и TCP; tun IPv6 fd00:13:37::2/64 если probe видит IPv6 у сервера
 212.80.7.230:26771:server.jar
 49.13.24.14:5555:server.jar

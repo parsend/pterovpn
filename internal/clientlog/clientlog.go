@@ -38,11 +38,15 @@ func Warn(format string, args ...interface{}) {
 	emit("WARN", fmt.Sprintf(format, args...))
 }
 
+func Trace(format string, args ...interface{}) {
+	emit("TRACE", fmt.Sprintf(format, args...))
+}
+
 func InferTag(line string) string {
 	if idx := strings.Index(line, "\t"); idx > 0 && idx <= 8 {
 		tag := line[:idx]
 		switch tag {
-		case "OK", "TRAFFIC", "DROP", "DPI", "ERR", "INFO", "WARN":
+		case "OK", "TRAFFIC", "DROP", "DPI", "ERR", "INFO", "WARN", "TRACE":
 			return tag
 		}
 	}
@@ -76,7 +80,7 @@ func InferTag(line string) string {
 }
 
 func LinePayload(line string) string {
-	for _, tag := range []string{"OK\t", "TRAFFIC\t", "DROP\t", "DPI\t", "ERR\t", "INFO\t", "WARN\t"} {
+	for _, tag := range []string{"OK\t", "TRAFFIC\t", "DROP\t", "DPI\t", "ERR\t", "INFO\t", "WARN\t", "TRACE\t"} {
 		if idx := strings.Index(line, tag); idx >= 0 {
 			return line[:idx] + "[" + tag[:len(tag)-1] + "] " + line[idx+len(tag):]
 		}

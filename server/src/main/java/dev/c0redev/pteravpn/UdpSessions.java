@@ -108,49 +108,50 @@ final class UdpSessions implements AutoCloseable {
         while (!closed.get()) {
             try {
                 int n = selector.select(1000);
-                if (n == 0) continue;
-                for (SelectionKey k : selector.selectedKeys()) {
-                    if (!k.isValid() || !k.isReadable()) continue;
-                    Object a = k.attachment();
-                    if (!(a instanceof Session s)) continue;
-                    try {
-                        while (true) {
-                            buf.clear();
-                            int r = s.dc.read(buf);
-                            if (r < 0) {
-                                closeSession(s.key, s);
-                                break;
+                if (n > 0) {
+                    for (SelectionKey k : selector.selectedKeys()) {
+                        if (!k.isValid() || !k.isReadable()) continue;
+                        Object a = k.attachment();
+                        if (!(a instanceof Session s)) continue;
+                        try {
+                            while (true) {
+                                buf.clear();
+                                int r = s.dc.read(buf);
+                                if (r < 0) {
+                                    closeSession(s.key, s);
+                                    break;
+                                }
+                                if (r == 0) break;
+                                buf.flip();
+                                byte[] payload = new byte[buf.remaining()];
+                                buf.get(payload);
+                                s.touch();
+                                if (s.writer != null) {
+                                    s.writer.send(
+                                        new Protocol.UdpFrame(
+                                            s.key.addrType,
+                                            s.key.srcPort,
+                                            s.dst,
+                                            s.key.dstPort,
+                                            payload
+                                        )
+                                    );
+                                }
                             }
-                            if (r == 0) break;
-                            buf.flip();
-                            byte[] payload = new byte[buf.remaining()];
-                            buf.get(payload);
-                            s.touch();
-                            if (s.writer != null) {
-                                s.writer.send(
-                                    new Protocol.UdpFrame(
-                                        s.key.addrType,
-                                        s.key.srcPort,
-                                        s.dst,
-                                        s.key.dstPort,
-                                        payload
-                                    )
-                                );
-                            }
+                        } catch (IOException e) {
+                            log.warning(
+                                "udp read failed for key=" +
+                                    s.key.srcPort +
+                                    ":" +
+                                    s.key.dstPort +
+                                    " - " +
+                                    e.getMessage()
+                            );
+                            closeSession(s.key, s);
                         }
-                    } catch (IOException e) {
-                        log.warning(
-                            "udp read failed for key=" +
-                                s.key.srcPort +
-                                ":" +
-                                s.key.dstPort +
-                                " - " +
-                                e.getMessage()
-                        );
-                        closeSession(s.key, s);
                     }
+                    selector.selectedKeys().clear();
                 }
-                selector.selectedKeys().clear();
                 long now = System.nanoTime();
                 if (now - lastCleanup >= TimeUnit.SECONDS.toNanos(10)) {
                     cleanupIdleSessions(now);
@@ -186,6 +187,11 @@ final class UdpSessions implements AutoCloseable {
         try {
             selector.close();
         } catch (Exception ignored) {}
+        try {
+            selectorThread.join(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static final class Session implements AutoCloseable {
