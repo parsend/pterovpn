@@ -29,7 +29,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
@@ -47,6 +50,8 @@ final class QuicServer implements AutoCloseable {
   private final UdpSessions udp;
   private final ExecutorService streamPool;
   private final AtomicInteger handshakes = new AtomicInteger();
+  private final ScheduledExecutorService handshakeTimers =
+      Executors.newSingleThreadScheduledExecutor();
   
   private final NioEventLoopGroup group = new NioEventLoopGroup(0);
   private Channel channel;
@@ -84,11 +89,17 @@ final class QuicServer implements AutoCloseable {
     advertisedQuicLeafPin = QuicTlsUtil.sha256Raw(quicLeaf.getEncoded());
     QuicSslContext sslContext = sslBuilder.applicationProtocols(cfg.quicAlpn()).build();
     int maxBi = Math.max(4, cfg.quicMaxStreams());
+    if (cfg.quicMaxStreams() <= 0) {
+      
+      maxBi = 4096;
+    }
     long streamWin = Math.min(16_000_000L, 1_200_000L + (long) maxBi * 80_000L);
     long connWin = Math.min(120_000_000L, streamWin * maxBi);
+    long idleMs = cfg.quicIdleTimeoutMs();
+    if (idleMs <= 0) idleMs = TimeUnit.HOURS.toMillis(24);
     ChannelHandler codec = new QuicServerCodecBuilder()
         .sslContext(sslContext)
-        .maxIdleTimeout(cfg.quicIdleTimeoutMs(), TimeUnit.MILLISECONDS)
+        .maxIdleTimeout(idleMs, TimeUnit.MILLISECONDS)
         .activeMigration(false)
         .initialMaxStreamsBidirectional(maxBi)
         .initialMaxStreamsUnidirectional(0)
@@ -129,6 +140,9 @@ final class QuicServer implements AutoCloseable {
     } catch (Exception e) {
       group.shutdownGracefully();
     }
+    try {
+      handshakeTimers.shutdownNow();
+    } catch (Exception ignored) {}
   }
 
   
@@ -217,15 +231,17 @@ final class QuicServer implements AutoCloseable {
         log.info("[quic-trace] stream channelActive id=" + ctx.channel().id()
           + " remote=" + stream.remoteAddress() + " handshakesPending≈" + handshakes.get());
       }
-      if (handshakes.incrementAndGet() > cfg.quicMaxHandshakes()) {
+      final boolean countHandshake = cfg.quicMaxHandshakes() > 0;
+      if (countHandshake && handshakes.incrementAndGet() > cfg.quicMaxHandshakes()) {
         handshakes.decrementAndGet();
         log.warning("[quic-trace] quicMaxHandshakes exceeded, closing stream");
         stream.close();
         return;
       }
       try {
-        streamPool.submit(() -> {
+        Future<?> f = streamPool.submit(() -> {
           boolean keepStreamOpen = false;
+          boolean released = false;
           try {
             InputStream in = io.input();
             OutputStream out = io.output(bytes -> stream.writeAndFlush(Unpooled.wrappedBuffer(bytes)));
@@ -251,6 +267,11 @@ final class QuicServer implements AutoCloseable {
             if (hs.role() == Protocol.ROLE_UDP) {
               keepStreamOpen = true;
             }
+           
+            if (countHandshake && !released) {
+              handshakes.decrementAndGet();
+              released = true;
+            }
             var session = new SessionHandler(cfg, udp, String.valueOf(stream.remoteAddress()), stream::close);
             session.handle(hs, hr, in, out, (connect, rest) -> handleTcpOverQuic(connect, rest, out), null);
           } catch (Exception e) {
@@ -259,7 +280,9 @@ final class QuicServer implements AutoCloseable {
               log.log(java.util.logging.Level.FINE, "[quic-trace] stream session stack", e);
             }
           } finally {
-            handshakes.decrementAndGet();
+            if (countHandshake && !released) {
+              handshakes.decrementAndGet();
+            }
             if (!keepStreamOpen) {
               try {
                 stream.close();
@@ -267,8 +290,15 @@ final class QuicServer implements AutoCloseable {
             }
           }
         });
+        if (countHandshake || cfg.quicIdleTimeoutMs() >= 0) {
+          handshakeTimers.schedule(
+              () -> f.cancel(true),
+              15_000,
+              TimeUnit.MILLISECONDS
+          );
+        }
       } catch (RejectedExecutionException e) {
-        handshakes.decrementAndGet();
+        if (countHandshake) handshakes.decrementAndGet();
         try {
           stream.close();
         } catch (Exception ignored) {}

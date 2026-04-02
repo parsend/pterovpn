@@ -123,9 +123,10 @@ final class Config {
     String quicCertPath = firstNonEmpty(p.getProperty("quicCertPath"), "");
     String quicKeyPath = firstNonEmpty(p.getProperty("quicKeyPath"), "");
     String quicAlpn = firstNonEmpty(p.getProperty("quicAlpn"), "pteravpn");
-    int quicMaxStreams = Math.max(1, parseInt(p.getProperty("quicMaxStreams"), 128));
-    int quicMaxHandshakes = Math.max(1, parseInt(p.getProperty("quicMaxHandshakes"), 512));
-    int quicIdleTimeoutMs = Math.max(1000, parseInt(p.getProperty("quicIdleTimeoutMs"), 120_000));
+
+    int quicMaxStreams = Math.max(0, parseInt(p.getProperty("quicMaxStreams"), 128));
+    int quicMaxHandshakes = Math.max(0, parseInt(p.getProperty("quicMaxHandshakes"), 512));
+    int quicIdleTimeoutMs = Math.max(0, parseInt(p.getProperty("quicIdleTimeoutMs"), 120_000));
     boolean quicTraceLog = "true".equalsIgnoreCase(p.getProperty("quicTraceLog", "").trim());
     if (serverMode.equals("quic-only") || serverMode.equals("both")) {
       if (quicListenPort < 1 || quicListenPort > 65535) throw new IOException("bad quicListenPort");
