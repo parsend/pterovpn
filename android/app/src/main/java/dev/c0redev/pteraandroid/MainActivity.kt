@@ -22,7 +22,6 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        handleRouteIntent(intent)
         setContent {
             PteraTheme {
                 Surface(modifier = Modifier, color = MaterialTheme.colorScheme.background) {
@@ -30,6 +29,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        handleRouteIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
