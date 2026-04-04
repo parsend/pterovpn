@@ -46,6 +46,31 @@ jobs:
           build-root-directory: android
           cache-read-only: false
 
+      - name: Set app version from Git ref
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            RAW="${GITHUB_REF#refs/tags/}"
+            VN="${RAW#v}"
+            if [[ "$VN" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              MA="${BASH_REMATCH[1]}"
+              MI="${BASH_REMATCH[2]}"
+              PA="${BASH_REMATCH[3]}"
+              VC=$((MA * 1000000 + MI * 1000 + PA))
+              echo "PTERA_VERSION_NAME=${MA}.${MI}.${PA}" >> "$GITHUB_ENV"
+              echo "PTERA_VERSION_CODE=${VC}" >> "$GITHUB_ENV"
+              echo "Android version ${MA}.${MI}.${PA} (code ${VC}) from tag ${RAW}"
+            else
+              echo "PTERA_VERSION_NAME=${VN}" >> "$GITHUB_ENV"
+              echo "PTERA_VERSION_CODE=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+              echo "Non-semver tag ${RAW}, using versionName as-is and code RUN_NUMBER"
+            fi
+          else
+            echo "PTERA_VERSION_NAME=0.0.0-ci+${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+            echo "PTERA_VERSION_CODE=$((100000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+            echo "Non-tag ref, ci snapshot"
+          fi
+
       - name: Assemble debug APK
         working-directory: android
         env:

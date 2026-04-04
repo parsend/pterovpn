@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+
+fun pteraVersionName(): String =
+    System.getenv("PTERA_VERSION_NAME")
+        ?: (project.findProperty("ptera.versionName") as String?)
+        ?: "0.0.0-dev"
+
+fun pteraVersionCode(): Int =
+    System.getenv("PTERA_VERSION_CODE")?.toIntOrNull()
+        ?: (project.findProperty("ptera.versionCode") as String?)?.toIntOrNull()
+        ?: 1
+
 android {
     namespace = "dev.c0redev.pteraandroid"
     compileSdk = 34
@@ -13,8 +24,8 @@ android {
         minSdk = 33
         targetSdk = 34
 
-        versionCode = 203
-        versionName = "2.0.3"
+        versionCode = pteraVersionCode()
+        versionName = pteraVersionName()
     }
 
     buildTypes {
