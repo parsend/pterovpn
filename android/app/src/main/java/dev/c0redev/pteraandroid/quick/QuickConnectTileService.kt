@@ -31,26 +31,33 @@ abstract class QuickConnectTileServiceBase : TileService() {
     }
 
     override fun onClick() {
-        val name = QuickConnectPrefs.getSlotName(this, slotIndex)?.trim().orEmpty()
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            if (name.isNotEmpty()) {
-                putExtra(MainActivity.EXTRA_QUICK_PROFILE, name)
+        val launch = Runnable {
+            val name = QuickConnectPrefs.getSlotName(this, slotIndex)?.trim().orEmpty()
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                if (name.isNotEmpty()) {
+                    putExtra(MainActivity.EXTRA_QUICK_PROFILE, name)
+                } else {
+                    putExtra(MainActivity.EXTRA_OPEN_SETTINGS_QUICK, true)
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 34) {
+                val pi = PendingIntent.getActivity(
+                    this,
+                    0x7000 + slotIndex,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                startActivityAndCollapse(pi)
             } else {
-                putExtra(MainActivity.EXTRA_OPEN_SETTINGS_QUICK, true)
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(intent)
             }
         }
-        if (Build.VERSION.SDK_INT >= 34) {
-            val pi = PendingIntent.getActivity(
-                this,
-                0x7000 + slotIndex,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            startActivityAndCollapse(pi)
+        if (isLocked) {
+            unlockAndRun(launch)
         } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
+            launch.run()
         }
     }
 }

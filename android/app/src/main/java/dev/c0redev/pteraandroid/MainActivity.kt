@@ -31,8 +31,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onStart() {
-        super.onStart()
+    override fun onResume() {
+        super.onResume()
+        // после onResume активити считается foreground, иначе startForegroundService из quick connect ловит FGS exception
         handleRouteIntent(intent)
     }
 

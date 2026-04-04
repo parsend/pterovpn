@@ -63,6 +63,7 @@
     <string name="configs_import_cancel">Отмена</string>
     <string name="cloud_import_saved">Сохранено как \"%1$s\" в локальных</string>
     <string name="quick_connect_unknown_profile">Нет локального профиля \"%1$s\"</string>
+    <string name="quick_connect_fgs_blocked">Сначала открой приложение, потом подключись (система запретила старт из фона)</string>
     <string name="quick_tile_empty">Не задано</string>
     <string name="quick_tiles_section">Плитки в шторке</string>
     <string name="quick_tiles_hint">Добавь плитки через редактор быстрых настроек. Только локальные профили.</string>

@@ -65,6 +65,7 @@
     <string name="configs_import_cancel">Cancel</string>
     <string name="cloud_import_saved">Saved as \"%1$s\" in local</string>
     <string name="quick_connect_unknown_profile">No local profile \"%1$s\"</string>
+    <string name="quick_connect_fgs_blocked">Open the app first, then connect (system blocked background start)</string>
     <string name="quick_tile_empty">Not set</string>
     <string name="quick_tiles_section">Quick settings tiles</string>
     <string name="quick_tiles_hint">Add tiles from the notification shade editor. Local profiles only.</string>

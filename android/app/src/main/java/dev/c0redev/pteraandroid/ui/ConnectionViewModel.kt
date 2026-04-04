@@ -1,6 +1,7 @@
 package dev.c0redev.pteraandroid.ui
 
 import android.app.Application
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -433,7 +434,12 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private fun startService(cfgJson: String, settingsJson: String) {
         PteraLog.i("startForegroundService cfgBytes=${cfgJson.length} settingsBytes=${settingsJson.length} dir=$configDir")
         val intent = PteraVpnService.newIntent(appCtx, cfgJson, settingsJson, configDir)
-        ContextCompat.startForegroundService(appCtx, intent)
+        try {
+            ContextCompat.startForegroundService(appCtx, intent)
+        } catch (e: ForegroundServiceStartNotAllowedException) {
+            PteraLog.w("FGS blocked: ${e.message}")
+            _uiMessages.tryEmit(appCtx.getString(R.string.quick_connect_fgs_blocked))
+        }
     }
 
     fun reloadProtectionAndSettings() {
