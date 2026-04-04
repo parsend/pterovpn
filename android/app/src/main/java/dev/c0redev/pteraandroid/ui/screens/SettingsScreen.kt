@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.c0redev.pteraandroid.BuildConfig
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.SectionCard
@@ -43,6 +44,11 @@ import dev.c0redev.pteraandroid.ui.components.StyledTextField
 fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val s = vm.clientSettings.collectAsState().value
     val upd by vm.updateStatus.collectAsState()
+    val remoteTag by vm.remoteReleaseTag.collectAsState()
+
+    LaunchedEffect(Unit) {
+        vm.refreshRemoteReleaseTag()
+    }
     var mode by remember { mutableStateOf(s.mode) }
     var proxyListen by remember { mutableStateOf(s.proxyListen) }
     var systemProxy by remember { mutableStateOf(s.systemProxy) }
@@ -267,6 +273,18 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
+                Text(
+                    text = "Сборка ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!remoteTag.isNullOrBlank()) {
+                    Text(
+                        text = "Релиз на GitHub: $remoteTag",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
                 Button(
                     onClick = { vm.checkForUpdateAndInstall() },

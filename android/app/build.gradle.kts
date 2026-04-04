@@ -13,8 +13,8 @@ android {
         minSdk = 33
         targetSdk = 34
 
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 203
+        versionName = "2.0.3"
     }
 
     buildTypes {
@@ -70,5 +70,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.navigation:navigation-compose:2.8.4")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }
 

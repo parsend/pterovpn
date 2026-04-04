@@ -24,6 +24,7 @@ import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.SessionRecord
 import dev.c0redev.pteraandroid.update.UpdateManager
+import dev.c0redev.pteraandroid.update.UpdatePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -94,6 +95,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private val updateManager = UpdateManager()
     private val _updateStatus = MutableStateFlow<String?>(null)
     val updateStatus = _updateStatus
+    private val _remoteReleaseTag = MutableStateFlow<String?>(UpdatePrefs.getRemoteReleaseTag(appCtx))
+    val remoteReleaseTag = _remoteReleaseTag
 
     private data class MetricDraft(
         val start: Instant,
@@ -153,6 +156,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         refreshCloudConfigs(true)
         reloadProtectionAndSettings()
         reloadMetrics()
+        viewModelScope.launch(Dispatchers.IO) {
+            _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+        }
     }
 
     override fun onCleared() {
@@ -372,11 +378,23 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { _metrics.value = localRepo.loadMetrics() }
     }
 
+    fun refreshRemoteReleaseTag() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+        }
+    }
+
     fun checkForUpdateAndInstall() {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { updateManager.checkAndInstall(appCtx, BuildConfig.VERSION_NAME) }
-                .onSuccess { _updateStatus.value = if (it) "Установка update запущена" else "Новых обновлений нет" }
-                .onFailure { _updateStatus.value = "Ошибка update ${it.message ?: "unknown"}" }
+                .onSuccess {
+                    _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+                    _updateStatus.value = if (it) "Установка запущена" else "Новых обновлений нет"
+                }
+                .onFailure {
+                    _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+                    _updateStatus.value = "Ошибка: ${it.message ?: "unknown"}"
+                }
         }
     }
 

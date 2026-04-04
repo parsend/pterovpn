@@ -1,8 +1,10 @@
 package dev.c0redev.pteraandroid.update
 
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
+import dev.c0redev.pteraandroid.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -14,6 +16,7 @@ class UpdateManager {
     companion object {
         private const val API_LATEST = "https://api.github.com/repos/unitdevgcc/pterovpn/releases/latest"
         private const val APK_MIME = "application/vnd.android.package-archive"
+        private const val MIN_APK_BYTES = 64 * 1024L
     }
 
     data class UpdateCandidate(
@@ -42,19 +45,22 @@ class UpdateManager {
 
     fun checkAndInstall(context: Context, currentVersion: String): Boolean {
         val candidate = checkLatestRelease() ?: return false
+        UpdatePrefs.setRemoteReleaseTag(context, candidate.tag)
         if (!isNewer(candidate.tag, currentVersion)) return false
 
-        val outFile = File(context.cacheDir, "updates/ptera-android-latest.apk")
-        outFile.parentFile?.mkdirs()
-        downloadToFile(candidate.apkUrl, outFile)
+        val dir = File(context.filesDir, "updates").apply { mkdirs() }
+        val outFile = File(dir, "install.apk")
+        val partFile = File(dir, "install.apk.part")
+        downloadApkToFile(candidate.apkUrl, partFile, outFile)
 
         val authority = "${context.packageName}.fileprovider"
         val uri = FileProvider.getUriForFile(context, authority, outFile)
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
+            clipData = ClipData.newRawUri("apk", uri)
             setDataAndType(uri, APK_MIME)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
         return true
@@ -111,33 +117,61 @@ class UpdateManager {
         return 0
     }
 
-    private fun downloadToFile(url: String, outFile: File) {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 30000
+    private fun downloadApkToFile(url: String, partFile: File, outFile: File) {
+        partFile.delete()
+        outFile.delete()
+        partFile.parentFile?.mkdirs()
+
+        val conn = openConnection(url)
+        conn.connectTimeout = 30_000
+        conn.readTimeout = 120_000
         conn.requestMethod = "GET"
-        conn.setRequestProperty("Accept", "*/*")
+        conn.setRequestProperty("Accept", "application/octet-stream, application/vnd.android.package-archive, */*")
 
         if (conn.responseCode !in 200..299) {
             throw IllegalStateException("download failed http=${conn.responseCode}")
         }
 
-        outFile.outputStream().use { os ->
-            conn.inputStream.use { input ->
-                input.copyTo(os)
+        conn.inputStream.use { input ->
+            partFile.outputStream().use { output ->
+                input.copyTo(output)
             }
+        }
+        conn.disconnect()
+
+        if (!looksLikeApkZip(partFile)) {
+            partFile.delete()
+            throw IllegalStateException("downloaded file is not a valid apk")
+        }
+        if (!partFile.renameTo(outFile)) {
+            partFile.copyTo(outFile, overwrite = true)
+            partFile.delete()
         }
     }
 
+    private fun looksLikeApkZip(f: File): Boolean {
+        if (f.length() < MIN_APK_BYTES) return false
+        return f.inputStream().use { ins ->
+            val buf = ByteArray(2)
+            ins.read(buf) == 2 && buf[0] == 0x50.toByte() && buf[1] == 0x4b.toByte()
+        }
+    }
+
+    private fun openConnection(url: String): HttpURLConnection {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.instanceFollowRedirects = true
+        c.setRequestProperty("User-Agent", "PteraVPN/${BuildConfig.VERSION_NAME}")
+        return c
+    }
+
     private fun httpGet(url: String): String? {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 15000
+        val conn = openConnection(url)
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 15_000
         conn.requestMethod = "GET"
         conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
 
         if (conn.responseCode !in 200..299) return null
-        return conn.inputStream.bufferedReader().use { it.readText() }
+        return conn.inputStream.bufferedReader().use { it.readText() }.also { conn.disconnect() }
     }
 }
-
