@@ -15,6 +15,12 @@ fun pteraVersionCode(): Int =
         ?: (project.findProperty("ptera.versionCode") as String?)?.toIntOrNull()
         ?: 1
 
+val ciDebugKeystore = file("ci-debug.keystore")
+val ciKeystorePass =
+    System.getenv("PTERA_CI_KEYSTORE_PASS")
+        ?: (project.findProperty("ptera.ciKeystorePass") as String?)
+        ?: "pteraci-debug"
+
 android {
     namespace = "dev.c0redev.pteraandroid"
     compileSdk = 34
@@ -28,9 +34,23 @@ android {
         versionName = pteraVersionName()
     }
 
+    signingConfigs {
+        if (ciDebugKeystore.exists()) {
+            create("ciDebug") {
+                storeFile = ciDebugKeystore
+                storePassword = ciKeystorePass
+                keyAlias = "pteraci"
+                keyPassword = ciKeystorePass
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isDebuggable = true
+            if (ciDebugKeystore.exists()) {
+                signingConfig = signingConfigs.getByName("ciDebug")
+            }
         }
         release {
             isMinifyEnabled = false

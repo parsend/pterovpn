@@ -33,4 +33,6 @@ android/.kotlin/
 *.hprof
 *.keystore
 *.jks
+
+!android/app/ci-debug.keystore
 android/app/libs/*.aar
