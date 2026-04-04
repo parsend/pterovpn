@@ -269,6 +269,7 @@ final class QuicServer implements AutoCloseable {
       }
       try {
         Future<?> f = streamPool.submit(() -> {
+          Thread.interrupted();
           boolean keepStreamOpen = false;
           boolean released = false;
           try {
@@ -329,7 +330,18 @@ final class QuicServer implements AutoCloseable {
         int handshakeMs = cfg.quicHandshakeTimeoutMs();
         long cancelAfterMs = handshakeMs > 0 ? handshakeMs : (countHandshake ? 60_000L : -1L);
         if (cancelAfterMs > 0) {
-          handshakeTimers.schedule(() -> f.cancel(true), cancelAfterMs, TimeUnit.MILLISECONDS);
+          handshakeTimers.schedule(
+              () -> {
+                if (f.isDone()) {
+                  return;
+                }
+                try {
+                  stream.close();
+                } catch (Exception ignored) {}
+                f.cancel(false);
+              },
+              cancelAfterMs,
+              TimeUnit.MILLISECONDS);
         }
       } catch (RejectedExecutionException e) {
         if (countHandshake) handshakes.decrementAndGet();
