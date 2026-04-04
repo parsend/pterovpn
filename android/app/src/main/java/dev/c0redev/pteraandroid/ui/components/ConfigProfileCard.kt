@@ -67,6 +67,8 @@ fun ConfigProfileCard(
     onPrimary: () -> Unit,
     onEdit: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    onImport: (() -> Unit)? = null,
+    importLabel: String? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val hostLine = serverHostFromField(item.config.server)
@@ -250,12 +252,26 @@ fun ConfigProfileCard(
                         }
                     }
                 } else {
-                    Button(
-                        onClick = onPrimary,
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(primaryLabel)
+                        Button(
+                            onClick = onPrimary,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(primaryLabel)
+                        }
+                        if (onImport != null && importLabel != null) {
+                            FilledTonalButton(
+                                onClick = onImport,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text(importLabel)
+                            }
+                        }
                     }
                 }
             } else {

@@ -35,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -55,9 +54,8 @@ private data class NavItem(
 
 @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Composable
-fun AppNavGraph() {
+fun AppNavGraph(vm: ConnectionViewModel) {
     val nav = rememberNavController()
-    val vm: ConnectionViewModel = viewModel()
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
     val vpnPrep by vm.vpnPermissionIntent.collectAsState()
@@ -81,6 +79,16 @@ fun AppNavGraph() {
     LaunchedEffect(Unit) {
         vm.uiMessages.collect { msg ->
             snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        vm.navToQuickTilesSettings.collect {
+            nav.navigate("settings") {
+                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
         }
     }
 

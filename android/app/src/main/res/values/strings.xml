@@ -58,6 +58,21 @@
     <string name="config_chip_ipv6_n">IPv4 only</string>
     <string name="config_cd_edit">Edit</string>
     <string name="config_delete">Delete</string>
+    <string name="configs_import_local">Import to local</string>
+    <string name="configs_import_title">Import cloud profile</string>
+    <string name="configs_import_name_label">Local name</string>
+    <string name="configs_import_confirm">Import</string>
+    <string name="configs_import_cancel">Cancel</string>
+    <string name="cloud_import_saved">Saved as \"%1$s\" in local</string>
+    <string name="quick_connect_unknown_profile">No local profile \"%1$s\"</string>
+    <string name="quick_tile_empty">Not set</string>
+    <string name="quick_tiles_section">Quick settings tiles</string>
+    <string name="quick_tiles_hint">Add tiles from the notification shade editor. Local profiles only.</string>
+    <string name="quick_slot_1">Tile 1</string>
+    <string name="quick_slot_2">Tile 2</string>
+    <string name="quick_slot_3">Tile 3</string>
+    <string name="quick_slot_pick">Choose</string>
+    <string name="quick_slot_none">None</string>
 
     <string name="logs_title">Logs</string>
     <string name="logs_empty">No logs yet. Connect from Configs first.</string>

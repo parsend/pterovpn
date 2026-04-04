@@ -45,6 +45,7 @@ import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.ProtectionOptions
 import dev.c0redev.pteraandroid.theme.PteraSpacing
+import dev.c0redev.pteraandroid.ui.ConfigItemState
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.ConfigProfileCard
 import dev.c0redev.pteraandroid.ui.components.StyledTextField
@@ -62,6 +63,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     var editorOpen by remember { mutableStateOf(false) }
     var editorOldName by remember { mutableStateOf<String?>(null) }
     var editorCfg by remember { mutableStateOf<Config?>(null) }
+    var importTarget by remember { mutableStateOf<ConfigItemState?>(null) }
 
     Column(
         modifier = Modifier
@@ -202,10 +204,43 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                         },
                         onEdit = null,
                         onDelete = null,
+                        onImport = { importTarget = item },
+                        importLabel = stringResource(R.string.configs_import_local),
                     )
                 }
             }
         }
+    }
+
+    val importTargetVal = importTarget
+    if (importTargetVal != null) {
+        var importName by remember(importTargetVal.name) { mutableStateOf(importTargetVal.name) }
+        AlertDialog(
+            onDismissRequest = { importTarget = null },
+            title = { Text(stringResource(R.string.configs_import_title)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.importCloudAsLocal(importName, importTargetVal)
+                        importTarget = null
+                        tabIndex = 0
+                    },
+                ) { Text(stringResource(R.string.configs_import_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { importTarget = null }) {
+                    Text(stringResource(R.string.configs_import_cancel))
+                }
+            },
+            text = {
+                StyledTextField(
+                    value = importName,
+                    onValueChange = { importName = it },
+                    label = stringResource(R.string.configs_import_name_label),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+        )
     }
 
     if (editorOpen) {

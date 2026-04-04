@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Update
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -23,27 +24,32 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.c0redev.pteraandroid.BuildConfig
 import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
+import dev.c0redev.pteraandroid.quick.QuickConnectPrefs
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.SectionCard
 import dev.c0redev.pteraandroid.ui.components.StyledTextField
 
 @Composable
 fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
+    val localNames = vm.localConfigs.collectAsState().value.map { it.name }
     val s = vm.clientSettings.collectAsState().value
     val upd by vm.updateStatus.collectAsState()
     val remoteTag by vm.remoteReleaseTag.collectAsState()
@@ -269,6 +275,22 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
         }
 
         SectionCard {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = stringResource(R.string.quick_tiles_section),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(R.string.quick_tiles_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                QuickTileSlotRows(localNames = localNames)
+            }
+        }
+
+        SectionCard {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     text = "Обновления",
@@ -327,5 +349,98 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun QuickTileSlotRows(localNames: List<String>) {
+    val ctx = LocalContext.current
+    var tick by remember { mutableIntStateOf(0) }
+    val s0 = remember(tick, ctx) { QuickConnectPrefs.getSlotName(ctx, 0) }
+    val s1 = remember(tick, ctx) { QuickConnectPrefs.getSlotName(ctx, 1) }
+    val s2 = remember(tick, ctx) { QuickConnectPrefs.getSlotName(ctx, 2) }
+    fun setSlot(slot: Int, name: String?) {
+        QuickConnectPrefs.setSlotName(ctx, slot, name)
+        tick++
+    }
+    QuickSlotRow(
+        title = stringResource(R.string.quick_slot_1),
+        current = s0,
+        names = localNames,
+        onSelect = { setSlot(0, it) },
+    )
+    QuickSlotRow(
+        title = stringResource(R.string.quick_slot_2),
+        current = s1,
+        names = localNames,
+        onSelect = { setSlot(1, it) },
+    )
+    QuickSlotRow(
+        title = stringResource(R.string.quick_slot_3),
+        current = s2,
+        names = localNames,
+        onSelect = { setSlot(2, it) },
+    )
+}
+
+@Composable
+private fun QuickSlotRow(
+    title: String,
+    current: String?,
+    names: List<String>,
+    onSelect: (String?) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+            Text(
+                text = current ?: stringResource(R.string.quick_slot_none),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TextButton(onClick = { open = true }) {
+            Text(stringResource(R.string.quick_slot_pick))
+        }
+    }
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { open = false },
+            title = { Text(title) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    TextButton(
+                        onClick = {
+                            onSelect(null)
+                            open = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.quick_slot_none))
+                    }
+                    names.forEach { n ->
+                        TextButton(
+                            onClick = {
+                                onSelect(n)
+                                open = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(n)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { open = false }) {
+                    Text(stringResource(R.string.configs_import_cancel))
+                }
+            },
+        )
     }
 }

@@ -120,6 +120,12 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     )
     val uiMessages: SharedFlow<String> = _uiMessages.asSharedFlow()
 
+    private val _navToQuickTilesSettings = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 4,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val navToQuickTilesSettings: SharedFlow<Unit> = _navToQuickTilesSettings.asSharedFlow()
+
     private val _activeProfileName = MutableStateFlow<String?>(null)
     val activeProfileName = _activeProfileName.asStateFlow()
 
@@ -473,6 +479,39 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun saveGlobalProtection(p: dev.c0redev.pteraandroid.domain.model.ProtectionOptions?) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveProtection(p); reloadProtectionAndSettings() } }
     fun upsertLocalConfig(name: String, cfg: Config) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveConfig(name, cfg); refreshLocalConfigs() } }
     fun deleteLocalConfig(name: String) { viewModelScope.launch(Dispatchers.IO) { localRepo.deleteConfig(name); refreshLocalConfigs() } }
+
+    fun importCloudAsLocal(desiredName: String, item: ConfigItemState) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var base = Config.sanitizeName(desiredName)
+            if (base.isBlank()) base = "imported"
+            var name = base
+            var suffix = 0
+            while (localRepo.loadConfig(name) != null) {
+                suffix++
+                name = "$base-$suffix"
+            }
+            var cfg = item.config.withCloudDefaults(item.serverMode, item.ipv6Support)
+            cfg = mergeEffectiveConfig(cfg)
+            localRepo.saveConfig(name, cfg)
+            refreshLocalConfigs()
+            _uiMessages.tryEmit(appCtx.getString(R.string.cloud_import_saved, name))
+        }
+    }
+
+    fun requestQuickConnect(profileName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cfg = localRepo.loadConfig(profileName)
+            if (cfg == null) {
+                _uiMessages.tryEmit(appCtx.getString(R.string.quick_connect_unknown_profile, profileName))
+                return@launch
+            }
+            connect(profileName, cfg)
+        }
+    }
+
+    fun requestNavigateToQuickTilesSettings() {
+        _navToQuickTilesSettings.tryEmit(Unit)
+    }
 
     fun disconnect() {
         PteraLog.i("disconnect coreHandle=$coreHandle")
