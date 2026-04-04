@@ -1,6 +1,8 @@
 package dev.c0redev.pteraandroid.quick
 
+import android.app.PendingIntent
 import android.content.Intent
+import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import dev.c0redev.pteraandroid.MainActivity
@@ -38,7 +40,18 @@ abstract class QuickConnectTileServiceBase : TileService() {
                 putExtra(MainActivity.EXTRA_OPEN_SETTINGS_QUICK, true)
             }
         }
-        startActivityAndCollapse(intent)
+        if (Build.VERSION.SDK_INT >= 34) {
+            val pi = PendingIntent.getActivity(
+                this,
+                0x7000 + slotIndex,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            startActivityAndCollapse(pi)
+        } else {
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
+        }
     }
 }
 
