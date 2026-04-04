@@ -12,12 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
 	"github.com/unitdevgcc/pterovpn/internal/config"
 	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/sockprotect"
 	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 
 	core "github.com/xjasonlyu/tun2socks/v2/core"
@@ -438,7 +440,19 @@ func pteravpnTunnelCfg(transport, quicServer string) string {
 }
 
 func dialTCP(addr string, token string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	d := net.Dialer{Timeout: 22 * time.Second, KeepAlive: 30 * time.Second}
+	if p := sockprotect.Protect; p != nil {
+		d.Control = func(network, address string, c syscall.RawConn) error {
+			var err error
+			e := c.Control(func(fd uintptr) {
+				err = p(fd)
+			})
+			if e != nil {
+				return e
+			}
+			return err
+		}
+	}
 	c, err := d.Dial("tcp", addr)
 	if err != nil {
 		return nil, err

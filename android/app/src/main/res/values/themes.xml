@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.PteraAndroid" parent="android:Theme.Material.NoActionBar" />
+</resources>

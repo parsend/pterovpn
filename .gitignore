@@ -18,3 +18,19 @@ ptera-client-linux-amd64
 ptera-client-linux-arm64
 ptera-client-windows-amd64.exe
 ptera-vpn-server.jar
+
+android/local.properties
+android/.gradle/
+android/**/.gradle/
+android/**/build/
+
+# android studio / ndk / локальные артефакты
+android/.idea/
+android/**/*.iml
+android/**/.cxx/
+android/**/captures/
+android/.kotlin/
+*.hprof
+*.keystore
+*.jks
+android/app/libs/*.aar

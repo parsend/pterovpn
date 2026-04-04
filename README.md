@@ -1,9 +1,10 @@
 # ptera vpn
 
-# Мобильная версия в разработке.
-#  Проект был написан unitdev - telegram: tcptransit
+Android-клиент в `android/`: c0redev (maxkrya).
 
-License: MIT © unitdev (parsend)
+Все сделал - c0redev (maxkrya), tg: tcptransit.
+
+License: MIT © c0redev (maxkrya) (parsend)
 
 ## server (java)
 

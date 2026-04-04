@@ -14,6 +14,32 @@ import (
 const cloudConfigURL = "https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/mew/cloud-config.txt"
 const cloudConfigFile = "cloud-config.txt"
 
+const CloudDefaultQUICPort = "4433"
+
+func QuicServerHostPortForCloudTCP(server string) string {
+	server = strings.TrimSpace(server)
+	h, _, err := net.SplitHostPort(server)
+	if err != nil {
+		if server == "" {
+			return ""
+		}
+		return net.JoinHostPort(server, CloudDefaultQUICPort)
+	}
+	return net.JoinHostPort(h, CloudDefaultQUICPort)
+}
+
+func cloudQuicNeedsDefaultPort(tcpServer, quicServer string) bool {
+	tcp := strings.TrimSpace(tcpServer)
+	qs := strings.TrimSpace(quicServer)
+	if tcp == "" {
+		return false
+	}
+	if qs == "" {
+		return true
+	}
+	return qs == tcp
+}
+
 func cloudConfigPath() (string, error) {
 	dir, err := Dir()
 	if err != nil {
@@ -179,7 +205,7 @@ func CloudList(fetch bool) ([]Config, []string, error) {
 			Token:      token,
 			TunCIDR6:   tun6,
 			Transport:  tr,
-			QuicServer: server,
+			QuicServer: QuicServerHostPortForCloudTCP(server),
 		}
 		if q := strings.TrimSpace(quicOpt); q != "" {
 			c.QuicServer = q

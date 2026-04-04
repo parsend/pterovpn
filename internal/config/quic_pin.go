@@ -24,3 +24,14 @@ func EffectiveQuicCertPin(c Config, caps *protocol.ServerHelloCaps) string {
 	}
 	return hex.EncodeToString(caps.QuicLeafPinSHA256)
 }
+
+func ApplyTcpOnlyIfServerHasNoQUIC(cfg *Config, caps *protocol.ServerHelloCaps) {
+	if cfg == nil || caps == nil {
+		return
+	}
+	if caps.TransportMask&protocol.TransportQUIC != 0 {
+		return
+	}
+	cfg.Transport = "tcp"
+	cfg.QuicServer = ""
+}

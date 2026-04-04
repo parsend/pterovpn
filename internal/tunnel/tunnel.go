@@ -7,12 +7,14 @@ import (
 	"crypto/x509"
 	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
 	"github.com/unitdevgcc/pterovpn/internal/config"
 	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
+	"github.com/unitdevgcc/pterovpn/internal/sockprotect"
 )
 
 func tunTCPPreferPlainTCP(port uint16) bool {
@@ -99,7 +101,19 @@ func (c *tunnelConn) Read(p []byte) (n int, err error) {
 }
 
 func dialServer(addr, token string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	d := net.Dialer{Timeout: 22 * time.Second, KeepAlive: 30 * time.Second}
+	if p := sockprotect.Protect; p != nil {
+		d.Control = func(network, address string, c syscall.RawConn) error {
+			var err error
+			e := c.Control(func(fd uintptr) {
+				err = p(fd)
+			})
+			if e != nil {
+				return e
+			}
+			return err
+		}
+	}
 	c, err := d.Dial("tcp", addr)
 	if err != nil {
 		return nil, err

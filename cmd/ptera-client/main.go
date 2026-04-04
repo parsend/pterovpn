@@ -134,6 +134,8 @@ func run() error {
 	if len(addrs) > 0 {
 		_, _, probeCaps, _ = probe.ProbePterovpnWithCaps(addrs[0], *token, 5*time.Second)
 	}
+	cfgProbe := config.Config{Transport: *transport, QuicServer: *quicServer}
+	config.ApplyTcpOnlyIfServerHasNoQUIC(&cfgProbe, probeCaps)
 	skip := *quicSkipVerify
 	effPin := config.EffectiveQuicCertPin(config.Config{
 		QuicSkipVerify:    &skip,
@@ -143,8 +145,8 @@ func run() error {
 	opts := runOpts{
 		serverIP:          sip,
 		token:             *token,
-		transport:         *transport,
-		quicServer:        *quicServer,
+		transport:         cfgProbe.Transport,
+		quicServer:        cfgProbe.QuicServer,
 		quicServerName:    *quicServerName,
 		quicSkipVerify:    *quicSkipVerify,
 		quicCertPinSHA256: effPin,
@@ -160,7 +162,7 @@ func run() error {
 		proxy:             *proxy,
 		proxyListen:       *proxyListen,
 		systemProxy:       *systemProxy,
-		dualTransport:     quicDualFromCaps(probeCaps, *transport, *quicServer),
+		dualTransport:     quicDualFromCaps(probeCaps, cfgProbe.Transport, cfgProbe.QuicServer),
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
 }

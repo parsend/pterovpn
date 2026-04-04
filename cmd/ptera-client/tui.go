@@ -185,6 +185,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			return nil, errors.New("preCheck: server is not pterovpn")
 		}
 	}
+	config.ApplyTcpOnlyIfServerHasNoQUIC(&cfg, probeCaps)
 	tunCIDR6 := strings.TrimSpace(cfg.TunCIDR6)
 	var quicRoots *x509.CertPool
 	if ca := strings.TrimSpace(cfg.QuicCaCert); ca != "" {

@@ -4,6 +4,32 @@ import (
 	"testing"
 )
 
+func TestQuicServerHostPortForCloudTCP(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"1.2.3.4:26771", "1.2.3.4:" + CloudDefaultQUICPort},
+		{"[2001:db8::1]:443", "[2001:db8::1]:" + CloudDefaultQUICPort},
+	} {
+		got := QuicServerHostPortForCloudTCP(tc.in)
+		if got != tc.want {
+			t.Errorf("QuicServerHostPortForCloudTCP(%q) = %q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestApplyCloudConnectDefaultsKeepsExplicitQuic(t *testing.T) {
+	cfg := Config{
+		Server:     "1.1.1.1:1",
+		Token:      "t",
+		QuicServer: "9.9.9.9:4433",
+	}
+	ApplyCloudConnectDefaults(&cfg, "quic/tcp", false)
+	if cfg.QuicServer != "9.9.9.9:4433" {
+		t.Errorf("got %q", cfg.QuicServer)
+	}
+}
+
 func TestParseCloudLineParts(t *testing.T) {
 	for _, tc := range []struct {
 		line, conn, tun6, quicOpt, tr string
@@ -39,6 +65,10 @@ func TestApplyCloudConnectDefaultsTLSAndTun6(t *testing.T) {
 	}
 	if cfg.TunCIDR6 != DefaultCloudTunCIDR6 {
 		t.Errorf("tun6 %q", cfg.TunCIDR6)
+	}
+	wantQuic := "5.42.123.155:" + CloudDefaultQUICPort
+	if cfg.QuicServer != wantQuic {
+		t.Errorf("QuicServer got %q want %q", cfg.QuicServer, wantQuic)
 	}
 }
 

@@ -2,8 +2,12 @@ name: test
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, mew]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -18,10 +22,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version-file: go.mod
+          cache: true
 
       - name: go test
         run: go test ./...
 
       - name: java test
         run: mvn -q -f server/pom.xml test
+
+  android:
+    uses: ./.github/workflows/android-reusable.yml

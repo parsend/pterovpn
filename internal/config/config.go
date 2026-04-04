@@ -20,6 +20,7 @@ type Config struct {
 	QuicCaCert        string `json:"quicCaCert,omitempty"`
 
 	QuicTraceLog bool               `json:"quicTraceLog,omitempty"`
+	DualTransport *bool `json:"dualTransport,omitempty"`
 	Routes       string             `json:"routes,omitempty"`
 	Exclude      string             `json:"exclude,omitempty"`
 	TunCIDR6     string             `json:"tunCIDR6,omitempty"`
@@ -123,12 +124,12 @@ func ApplyCloudConnectDefaults(cfg *Config, serverMode string, probeIPv6 bool) {
 			cfg.Transport = "tcp"
 			cfg.QuicServer = ""
 		case "quic only", "quic/tcp":
-			if strings.TrimSpace(cfg.QuicServer) == "" {
-				cfg.QuicServer = cfg.Server
+			if cloudQuicNeedsDefaultPort(cfg.Server, cfg.QuicServer) {
+				cfg.QuicServer = QuicServerHostPortForCloudTCP(cfg.Server)
 			}
 		default:
-			if strings.TrimSpace(cfg.QuicServer) == "" {
-				cfg.QuicServer = cfg.Server
+			if cloudQuicNeedsDefaultPort(cfg.Server, cfg.QuicServer) {
+				cfg.QuicServer = QuicServerHostPortForCloudTCP(cfg.Server)
 			}
 		}
 	}
