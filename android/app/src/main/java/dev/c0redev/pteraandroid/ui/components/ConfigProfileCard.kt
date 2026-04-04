@@ -1,6 +1,7 @@
 package dev.c0redev.pteraandroid.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,20 +40,20 @@ import dev.c0redev.pteraandroid.data.servergeo.serverHostFromField
 import dev.c0redev.pteraandroid.ui.ConfigItemState
 
 private fun pingTint(ms: Long?, failed: Boolean, scheme: androidx.compose.material3.ColorScheme): Color {
-    if (failed || ms == null) return scheme.errorContainer.copy(alpha = 0.55f)
+    if (failed || ms == null) return scheme.errorContainer.copy(alpha = 0.45f)
     return when {
-        ms < 85L -> Color(0xFF1B5E20).copy(alpha = 0.35f)
-        ms < 200L -> Color(0xFFE65100).copy(alpha = 0.35f)
-        else -> Color(0xFFB71C1C).copy(alpha = 0.35f)
+        ms < 85L -> scheme.tertiaryContainer.copy(alpha = 0.55f)
+        ms < 200L -> scheme.secondaryContainer.copy(alpha = 0.45f)
+        else -> scheme.errorContainer.copy(alpha = 0.38f)
     }
 }
 
 private fun pingLabelColor(ms: Long?, failed: Boolean, scheme: androidx.compose.material3.ColorScheme): Color {
     if (failed || ms == null) return scheme.onErrorContainer
     return when {
-        ms < 85L -> Color(0xFFC8E6C9)
-        ms < 200L -> Color(0xFFFFE0B2)
-        else -> Color(0xFFFFCDD2)
+        ms < 85L -> scheme.onTertiaryContainer
+        ms < 200L -> scheme.onSecondaryContainer
+        else -> scheme.onErrorContainer
     }
 }
 
@@ -61,6 +62,7 @@ private fun pingLabelColor(ms: Long?, failed: Boolean, scheme: androidx.compose.
 fun ConfigProfileCard(
     item: ConfigItemState,
     modifier: Modifier = Modifier,
+    isActive: Boolean = false,
     primaryLabel: String,
     onPrimary: () -> Unit,
     onEdit: (() -> Unit)? = null,
@@ -70,12 +72,26 @@ fun ConfigProfileCard(
     val hostLine = serverHostFromField(item.config.server)
     val geo = item.geo
 
+    val cardShape = RoundedCornerShape(20.dp)
+    val borderMod = if (isActive) {
+        Modifier.border(2.dp, scheme.primary.copy(alpha = 0.55f), cardShape)
+    } else {
+        Modifier
+    }
     ElevatedCard(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 3.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(borderMod),
+        shape = cardShape,
+        elevation = CardDefaults.elevatedCardElevation(
+            defaultElevation = if (isActive) 2.dp else 3.dp,
+        ),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = scheme.surfaceContainerHigh,
+            containerColor = if (isActive) {
+                scheme.primaryContainer.copy(alpha = 0.42f)
+            } else {
+                scheme.surfaceContainerHigh
+            },
         ),
     ) {
         Column(
@@ -213,12 +229,34 @@ fun ConfigProfileCard(
             }
 
             if (onEdit == null && onDelete == null) {
-                Button(
-                    onClick = onPrimary,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(primaryLabel)
+                if (isActive) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = scheme.primary.copy(alpha = 0.22f),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(R.string.config_profile_active),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = scheme.primary,
+                            )
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = onPrimary,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(primaryLabel)
+                    }
                 }
             } else {
                 Row(
@@ -226,12 +264,34 @@ fun ConfigProfileCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Button(
-                        onClick = onPrimary,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(primaryLabel)
+                    if (isActive) {
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            color = scheme.primary.copy(alpha = 0.22f),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    stringResource(R.string.config_profile_active),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = scheme.primary,
+                                )
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = onPrimary,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(primaryLabel)
+                        }
                     }
                     if (onEdit != null) {
                         FilledTonalButton(

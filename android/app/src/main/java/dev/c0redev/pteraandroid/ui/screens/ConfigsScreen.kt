@@ -1,5 +1,8 @@
 package dev.c0redev.pteraandroid.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +22,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +56,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val cloudItems = vm.cloudConfigs.collectAsState().value
     val cloudLoading = vm.cloudLoading.collectAsState().value
     val conn = vm.connection.collectAsState().value
+    val activeProfileName = vm.activeProfileName.collectAsState().value
     var tabIndex by remember { mutableIntStateOf(0) }
 
     var editorOpen by remember { mutableStateOf(false) }
@@ -74,11 +79,12 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
             text = stringResource(R.string.configs_screen_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
         )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp),
+                .padding(top = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -102,18 +108,15 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
             }
         }
 
-        PrimaryTabRow(selectedTabIndex = tabIndex) {
-            Tab(
-                selected = tabIndex == 0,
-                onClick = { tabIndex = 0 },
-                text = { Text(stringResource(R.string.configs_tab_local)) },
-            )
-            Tab(
-                selected = tabIndex == 1,
-                onClick = { tabIndex = 1 },
-                text = { Text(stringResource(R.string.configs_tab_cloud)) },
-            )
-        }
+        ConfigSourceSegment(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 20.dp, bottom = 4.dp),
+            selectedIndex = tabIndex,
+            onSelect = { tabIndex = it },
+            localLabel = stringResource(R.string.configs_tab_local),
+            cloudLabel = stringResource(R.string.configs_tab_cloud),
+        )
 
         when (tabIndex) {
             0 -> LazyColumn(
@@ -131,8 +134,10 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     }
                 }
                 items(localItems, key = { it.name }) { it ->
+                    val profileActive = conn.connected && activeProfileName == it.name
                     ConfigProfileCard(
                         item = it,
+                        isActive = profileActive,
                         primaryLabel = stringResource(R.string.configs_connect),
                         onPrimary = { vm.connect(it.name, it.config) },
                         onEdit = {
@@ -181,8 +186,10 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     }
                 }
                 items(cloudItems, key = { it.name }) { item ->
+                    val profileActive = conn.connected && activeProfileName == item.name
                     ConfigProfileCard(
                         item = item,
+                        isActive = profileActive,
                         primaryLabel = stringResource(R.string.configs_cloud_connect),
                         onPrimary = {
                             vm.connect(
@@ -213,6 +220,58 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                 vm.upsertLocalConfig(newName, newCfg)
             },
         )
+    }
+}
+
+@Composable
+private fun ConfigSourceSegment(
+    modifier: Modifier = Modifier,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    localLabel: String,
+    cloudLabel: String,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(28.dp),
+        color = scheme.surfaceContainerLow,
+        shadowElevation = 0.dp,
+        tonalElevation = 0.dp,
+    ) {
+        Row(
+            Modifier
+                .padding(4.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            listOf(0 to localLabel, 1 to cloudLabel).forEach { (idx, label) ->
+                val sel = selectedIndex == idx
+                val interaction = remember(idx) { MutableInteractionSource() }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            if (sel) scheme.primaryContainer.copy(alpha = 0.72f) else Color.Transparent,
+                        )
+                        .clickable(
+                            interactionSource = interaction,
+                            indication = null,
+                            onClick = { onSelect(idx) },
+                        )
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (sel) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

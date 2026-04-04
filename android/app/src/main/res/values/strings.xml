@@ -38,6 +38,7 @@
     <string name="configs_tab_cloud">Cloud</string>
     <string name="configs_add">Add</string>
     <string name="configs_connect">Connect</string>
+    <string name="config_profile_active">Active</string>
     <string name="configs_empty_local">No local configs. Tap Add.</string>
     <string name="configs_empty_cloud">Cloud list is empty. Pull to refresh or check cloud-config.</string>
     <string name="configs_cloud_refresh">Refresh cloud</string>
@@ -48,7 +49,7 @@
     <string name="configs_cloud_probe_fmt">Probe %1$s • IPv6 %2$s • Mode %3$s</string>
     <string name="configs_cloud_connect">Connect</string>
     <string name="configs_connect_cd">Connect %1$s</string>
-    <string name="configs_screen_hint">Local files and cloud list. Cards show ping, country, ASN.</string>
+    <string name="configs_screen_hint">Local files and cloud list.</string>
     <string name="config_card_ping_ms">%1$d ms</string>
     <string name="config_card_ping_na">no ping</string>
     <string name="config_chip_probe_ok">probe OK</string>

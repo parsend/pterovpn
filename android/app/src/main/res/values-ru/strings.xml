@@ -35,7 +35,8 @@
     <string name="configs_tab_local">Локальные</string>
     <string name="configs_tab_cloud">Облако</string>
     <string name="configs_add">Добавить</string>
-    <string name="configs_connect">Connect</string>
+    <string name="configs_connect">Подключить</string>
+    <string name="config_profile_active">Активно</string>
     <string name="configs_empty_local">Нет локальных конфигов. Нажми «Добавить».</string>
     <string name="configs_empty_cloud">Список cloud пуст. Обнови или проверь cloud-config.</string>
     <string name="configs_cloud_refresh">Обновить cloud</string>
@@ -46,7 +47,7 @@
     <string name="configs_cloud_probe_fmt">Probe %1$s • IPv6 %2$s • Mode %3$s</string>
     <string name="configs_cloud_connect">Подключить</string>
     <string name="configs_connect_cd">Подключить %1$s</string>
-    <string name="configs_screen_hint">Локальные файлы и облако. На карточках пинг, страна, ASN.</string>
+    <string name="configs_screen_hint">Локальные файлы и облако.</string>
     <string name="config_card_ping_ms">%1$d ms</string>
     <string name="config_card_ping_na">нет пинга</string>
     <string name="config_chip_probe_ok">probe OK</string>

@@ -120,6 +120,17 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     )
     val uiMessages: SharedFlow<String> = _uiMessages.asSharedFlow()
 
+    private val _activeProfileName = MutableStateFlow<String?>(null)
+    val activeProfileName = _activeProfileName.asStateFlow()
+
+    private fun setActiveProfileUi(name: String) {
+        _activeProfileName.value = name
+    }
+
+    private fun clearActiveProfileUi() {
+        _activeProfileName.value = null
+    }
+
     private data class MetricDraft(
         val start: Instant,
         val configName: String,
@@ -146,12 +157,14 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 ++pollGeneration
                 coreHandle = -1
                 if (!hideNoSession) {
+                    clearActiveProfileUi()
                     _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = normalized)
                     _logs.value = (_logs.value + listOf("ERR\t$normalized")).takeLast(500)
                     _uiMessages.tryEmit(normalized)
                     val draft = activeMetric
                     if (draft != null) finalizeActiveMetric(Instant.now(), handshakeOk = draft.handshakeOk, errorType = classifyErr(normalized))
                 } else {
+                    clearActiveProfileUi()
                     _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = null)
                     val draft = activeMetric
                     if (draft != null) finalizeActiveMetric(Instant.now(), handshakeOk = draft.handshakeOk, errorType = classifyErr(normalized))
@@ -278,6 +291,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             pendingConnectSettings = null
             activeConfig = effective
             activeConfigName = name
+            setActiveProfileUi(name)
             activeStartedAt = Instant.now()
             autoFallbackDone = false
             activateMetric()
@@ -295,6 +309,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             pendingConnectSettings = null
             activeConfig = cfg
             activeConfigName = name
+            setActiveProfileUi(name)
             activeStartedAt = Instant.now()
             autoFallbackDone = false
             activateMetric()
@@ -467,6 +482,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         val currentHandle = coreHandle
         coreHandle = -1
         _connection.value = ConnectionState()
+        clearActiveProfileUi()
         activeStartedAt = null
         autoFallbackDone = false
         val draft = activeMetric
@@ -500,6 +516,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         val fallbackCfg = cfg.copy(transport = "tcp", quicServer = null)
         activeConfig = fallbackCfg
         activeConfigName = name
+        setActiveProfileUi(name)
         activeStartedAt = Instant.now()
         val settings = localRepo.loadClientSettings()
         startService(fallbackCfg.toJson().toString(), settings.toJson().toString())
@@ -543,6 +560,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                     if (noSession) {
                         if (gen == pollGeneration) {
                             coreHandle = -1
+                            clearActiveProfileUi()
                             _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = null)
                             pollJob = null
                             PteraLog.w("poll exit noSession gen=$gen handle=$handle")
