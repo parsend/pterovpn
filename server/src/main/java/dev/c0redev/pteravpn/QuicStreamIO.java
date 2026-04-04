@@ -4,20 +4,37 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ForkJoinPool;
 import java.util.function.Consumer;
 
 final class QuicStreamIO {
-  private final BlockingQueue<byte[]> q = new LinkedBlockingQueue<>();
   private static final byte[] EOF = new byte[0];
 
-  void feed(byte[] bytes) {
-    q.offer(bytes);
+  private final SpscChunkRing ring;
+  private final Runnable onSpace;
+  private volatile boolean eofQueued;
+
+  QuicStreamIO(int ringCapacity, Runnable onSpace) {
+    this.ring = new SpscChunkRing(ringCapacity);
+    this.onSpace = onSpace != null ? onSpace : () -> {};
+  }
+
+  boolean feed(byte[] bytes) {
+    return ring.offer(bytes);
   }
 
   void endInput() {
-    q.offer(EOF);
+    if (eofQueued) {
+      return;
+    }
+    eofQueued = true;
+    ForkJoinPool.commonPool().execute(() -> {
+      try {
+        ring.put(EOF);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    });
   }
 
   InputStream input() {
@@ -35,14 +52,20 @@ final class QuicStreamIO {
       @Override
       public int read(byte[] b, int o, int l) throws IOException {
         while (cur == null || off >= cur.length) {
+          byte[] next;
           try {
-            cur = q.take();
+            next = ring.take();
           } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException(e);
           }
           off = 0;
-          if (cur == EOF) return -1;
+          if (next == EOF) {
+            onSpace.run();
+            return -1;
+          }
+          cur = next;
+          onSpace.run();
         }
         int n = Math.min(l, cur.length - off);
         System.arraycopy(cur, off, b, o, n);

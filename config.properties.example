@@ -12,9 +12,12 @@ serverMode=tcp-only
 # quicKeyPath=quic/auto.key
 
 # quicAlpn=pteravpn
-# quicMaxStreams=0          
-# quicMaxHandshakes=0      
-# quicIdleTimeoutMs=0      
+# quicMaxStreams=0
+# quicMaxHandshakes=0
+# quicIdleTimeoutMs=900000
+# quicHandshakeTimeoutMs=60000
+# quicTcpConnectTimeoutMs=10000
+# quicIngressRingSlots=4096
 
 update.enabled=true
 update.repo=unitdevgcc/pterovpn

@@ -26,13 +26,17 @@ final class Config {
   private final int quicMaxStreams;
   private final int quicMaxHandshakes;
   private final int quicIdleTimeoutMs;
-  
+  private final int quicHandshakeTimeoutMs;
+  private final int quicTcpConnectTimeoutMs;
+  private final int quicIngressRingSlots;
+
   private final boolean quicTraceLog;
 
   private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug,
                  boolean updateEnabled, String updateRepo, int updateCheckIntervalMinutes, int updateRestartExitCode,
                  String serverMode, int quicListenPort, String quicCertPath, String quicKeyPath,
                  String quicAlpn, int quicMaxStreams, int quicMaxHandshakes, int quicIdleTimeoutMs,
+                 int quicHandshakeTimeoutMs, int quicTcpConnectTimeoutMs, int quicIngressRingSlots,
                  boolean quicTraceLog) {
     this.listenPorts = listenPorts;
     this.token = token;
@@ -51,6 +55,9 @@ final class Config {
     this.quicMaxStreams = quicMaxStreams;
     this.quicMaxHandshakes = quicMaxHandshakes;
     this.quicIdleTimeoutMs = quicIdleTimeoutMs;
+    this.quicHandshakeTimeoutMs = quicHandshakeTimeoutMs;
+    this.quicTcpConnectTimeoutMs = quicTcpConnectTimeoutMs;
+    this.quicIngressRingSlots = quicIngressRingSlots;
     this.quicTraceLog = quicTraceLog;
   }
 
@@ -62,6 +69,9 @@ final class Config {
   int quicMaxStreams() { return quicMaxStreams; }
   int quicMaxHandshakes() { return quicMaxHandshakes; }
   int quicIdleTimeoutMs() { return quicIdleTimeoutMs; }
+  int quicHandshakeTimeoutMs() { return quicHandshakeTimeoutMs; }
+  int quicTcpConnectTimeoutMs() { return quicTcpConnectTimeoutMs; }
+  int quicIngressRingSlots() { return quicIngressRingSlots; }
   boolean quicTraceLog() { return quicTraceLog; }
   boolean tcpEnabled() { return !"quic-only".equals(serverMode); }
   boolean quicEnabled() { return !"tcp-only".equals(serverMode); }
@@ -126,7 +136,10 @@ final class Config {
 
     int quicMaxStreams = Math.max(0, parseInt(p.getProperty("quicMaxStreams"), 128));
     int quicMaxHandshakes = Math.max(0, parseInt(p.getProperty("quicMaxHandshakes"), 512));
-    int quicIdleTimeoutMs = Math.max(0, parseInt(p.getProperty("quicIdleTimeoutMs"), 120_000));
+    int quicIdleTimeoutMs = Math.max(0, parseInt(p.getProperty("quicIdleTimeoutMs"), 900_000));
+    int quicHandshakeTimeoutMs = Math.max(0, parseInt(p.getProperty("quicHandshakeTimeoutMs"), 60_000));
+    int quicTcpConnectTimeoutMs = Math.max(1_000, parseInt(p.getProperty("quicTcpConnectTimeoutMs"), 10_000));
+    int quicIngressRingSlots = Math.max(64, parseInt(p.getProperty("quicIngressRingSlots"), 4096));
     boolean quicTraceLog = "true".equalsIgnoreCase(p.getProperty("quicTraceLog", "").trim());
     if (serverMode.equals("quic-only") || serverMode.equals("both")) {
       if (quicListenPort < 1 || quicListenPort > 65535) throw new IOException("bad quicListenPort");
@@ -136,6 +149,7 @@ final class Config {
     return new Config(ports, token, udpChannels, publicHost != null ? publicHost : "", debug,
         updateEnabled, updateRepo, updateCheckIntervalMinutes, updateRestartExitCode,
         serverMode, quicListenPort, quicCertPath, quicKeyPath, quicAlpn, quicMaxStreams, quicMaxHandshakes, quicIdleTimeoutMs,
+        quicHandshakeTimeoutMs, quicTcpConnectTimeoutMs, quicIngressRingSlots,
         quicTraceLog);
   }
 

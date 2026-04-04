@@ -24,7 +24,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.File;
 import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
@@ -126,7 +125,7 @@ final class QuicServer implements AutoCloseable {
       bs.handler(codec);
     }
     channel = bs.bind(new InetSocketAddress(cfg.quicListenPort())).sync().channel();
-    log.info("QUIC listening on : " + cfg.quicListenPort());
+    log.info("QUIC listening on : " + cfg.quicListenPort() + " maxIdleTimeoutMs=" + idleMs);
   }
 
   @Override
@@ -196,16 +195,37 @@ final class QuicServer implements AutoCloseable {
       if (cfg.quicTraceLog()) {
         log.info("[quic-trace] stream initChannel id=" + ch.id() + " remote=" + ch.remoteAddress());
       }
-      ch.pipeline().addLast(new QuicStreamInboundHandler(ch));
+      ch.pipeline().addLast(new QuicStreamInboundHandler(ch, cfg));
     }
   }
 
   private final class QuicStreamInboundHandler extends ChannelInboundHandlerAdapter {
     private final QuicStreamChannel stream;
-    private final QuicStreamIO io = new QuicStreamIO();
+    private final Config cfg;
+    private QuicStreamIO io;
+    private byte[] pending;
+    private ChannelHandlerContext ctx;
 
-    QuicStreamInboundHandler(QuicStreamChannel stream) {
+    QuicStreamInboundHandler(QuicStreamChannel stream, Config cfg) {
       this.stream = stream;
+      this.cfg = cfg;
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) {
+      this.ctx = ctx;
+      io = new QuicStreamIO(cfg.quicIngressRingSlots(), () -> ctx.executor().execute(this::flushPending));
+    }
+
+    private void flushPending() {
+      byte[] p = pending;
+      if (p == null || io == null) {
+        return;
+      }
+      if (io.feed(p)) {
+        pending = null;
+        ctx.channel().config().setAutoRead(true);
+      }
     }
 
     @Override
@@ -213,8 +233,15 @@ final class QuicServer implements AutoCloseable {
       if (msg instanceof ByteBuf b) {
         byte[] data = new byte[b.readableBytes()];
         b.readBytes(data);
-        io.feed(data);
         b.release();
+        if (io == null) {
+          return;
+        }
+        if (io.feed(data)) {
+          return;
+        }
+        pending = data;
+        ctx.channel().config().setAutoRead(false);
         return;
       }
       ctx.fireChannelRead(msg);
@@ -222,7 +249,9 @@ final class QuicServer implements AutoCloseable {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-      io.endInput();
+      if (io != null) {
+        io.endInput();
+      }
     }
 
     @Override
@@ -273,7 +302,14 @@ final class QuicServer implements AutoCloseable {
               released = true;
             }
             var session = new SessionHandler(cfg, udp, String.valueOf(stream.remoteAddress()), stream::close);
-            session.handle(hs, hr, in, out, (connect, rest) -> handleTcpOverQuic(connect, rest, out), null);
+            session.handle(
+                hs,
+                hr,
+                in,
+                out,
+                (connect, rest) ->
+                    QuicTcpRelay.run(connect, rest, out, cfg.quicTcpConnectTimeoutMs()),
+                null);
           } catch (Exception e) {
             log.warning("QUIC stream session failed: " + e);
             if (cfg.quicTraceLog()) {
@@ -290,12 +326,10 @@ final class QuicServer implements AutoCloseable {
             }
           }
         });
-        if (countHandshake || cfg.quicIdleTimeoutMs() >= 0) {
-          handshakeTimers.schedule(
-              () -> f.cancel(true),
-              15_000,
-              TimeUnit.MILLISECONDS
-          );
+        int handshakeMs = cfg.quicHandshakeTimeoutMs();
+        long cancelAfterMs = handshakeMs > 0 ? handshakeMs : (countHandshake ? 60_000L : -1L);
+        if (cancelAfterMs > 0) {
+          handshakeTimers.schedule(() -> f.cancel(true), cancelAfterMs, TimeUnit.MILLISECONDS);
         }
       } catch (RejectedExecutionException e) {
         if (countHandshake) handshakes.decrementAndGet();
@@ -306,31 +340,4 @@ final class QuicServer implements AutoCloseable {
     }
   }
 
-  private void handleTcpOverQuic(Protocol.TcpConnect c, InputStream in, OutputStream out) throws IOException {
-    try (Socket remote = new Socket(c.ip(), c.port())) {
-      remote.setTcpNoDelay(true);
-      var remoteIn = remote.getInputStream();
-      var remoteOut = remote.getOutputStream();
-      Thread t1 = new Thread(() -> copy(in, remoteOut), "quic-tcp-up");
-      Thread t2 = new Thread(() -> copy(remoteIn, out), "quic-tcp-down");
-      t1.start();
-      t2.start();
-      t1.join();
-      t2.join();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
-  private static void copy(InputStream in, OutputStream out) {
-    byte[] buf = new byte[32 * 1024];
-    try {
-      while (true) {
-        int n = in.read(buf);
-        if (n < 0) return;
-        out.write(buf, 0, n);
-        out.flush();
-      }
-    } catch (IOException ignored) {}
-  }
 }
