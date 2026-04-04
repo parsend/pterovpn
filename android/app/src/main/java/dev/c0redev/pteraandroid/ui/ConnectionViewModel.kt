@@ -20,6 +20,8 @@ import dev.c0redev.pteraandroid.PteraVpnService
 import dev.c0redev.pteraandroid.core.CoreBridge
 import dev.c0redev.pteraandroid.data.cloud.CloudConfigRepository
 import dev.c0redev.pteraandroid.data.repo.LocalConfigRepository
+import dev.c0redev.pteraandroid.data.servergeo.IpWhoLookup
+import dev.c0redev.pteraandroid.data.servergeo.ServerGeo
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.SessionRecord
@@ -36,7 +38,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
@@ -53,6 +59,7 @@ data class ConfigItemState(
     val probeOk: Boolean = false,
     val ipv6Support: Boolean = false,
     val serverMode: String = "",
+    val geo: ServerGeo? = null,
 )
 
 data class ConnectionState(
@@ -185,36 +192,61 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshLocalConfigs() {
         viewModelScope.launch(Dispatchers.IO) {
-            _localConfigs.value = localRepo.listConfigs().map { stored ->
-                val ping = CoreBridge.ping(stored.config.server, 5000)
-                val probe = CoreBridge.probePterovpn(stored.config.server, stored.config.token, 5000)
-                ConfigItemState(
-                    name = stored.name,
-                    config = stored.config,
-                    pingMs = ping.rttMs.takeIf { ping.error == null },
-                    pingFailed = ping.error != null,
-                    probeOk = probe.ok,
-                    ipv6Support = probe.ipv6,
-                    serverMode = probe.mode,
-                )
+            val list = localRepo.listConfigs()
+            _localConfigs.value = coroutineScope {
+                list.map { stored ->
+                    async {
+                        val ping = CoreBridge.ping(stored.config.server, 5000)
+                        val probe = CoreBridge.probePterovpn(stored.config.server, stored.config.token, 5000)
+                        val geo = withTimeoutOrNull(8000) {
+                            IpWhoLookup.lookupForServerField(stored.config.server)
+                        }
+                        ConfigItemState(
+                            name = stored.name,
+                            config = stored.config,
+                            pingMs = ping.rttMs.takeIf { ping.error == null },
+                            pingFailed = ping.error != null,
+                            probeOk = probe.ok,
+                            ipv6Support = probe.ipv6,
+                            serverMode = probe.mode,
+                            geo = geo,
+                        )
+                    }
+                }.awaitAll()
             }
         }
     }
 
     fun refreshCloudConfigs(fetch: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
-            _cloudConfigs.value = cloudRepo.cloudList(fetch).map { item ->
-                val ping = CoreBridge.ping(item.config.server, 5000)
-                val probe = CoreBridge.probePterovpn(item.config.server, item.config.token, 5000)
-                ConfigItemState(
-                    name = item.name,
-                    config = item.config,
-                    pingMs = ping.rttMs.takeIf { ping.error == null },
-                    pingFailed = ping.error != null,
-                    probeOk = probe.ok,
-                    ipv6Support = probe.ipv6,
-                    serverMode = probe.mode,
-                )
+            _cloudLoading.value = true
+            try {
+                val raw = cloudRepo.cloudList(fetch)
+                _cloudConfigs.value = coroutineScope {
+                    raw.map { item ->
+                        async {
+                            val ping = CoreBridge.ping(item.config.server, 5000)
+                            val probe = CoreBridge.probePterovpn(item.config.server, item.config.token, 5000)
+                            val geo = withTimeoutOrNull(8000) {
+                                IpWhoLookup.lookupForServerField(item.config.server)
+                            }
+                            ConfigItemState(
+                                name = item.name,
+                                config = item.config,
+                                pingMs = ping.rttMs.takeIf { ping.error == null },
+                                pingFailed = ping.error != null,
+                                probeOk = probe.ok,
+                                ipv6Support = probe.ipv6,
+                                serverMode = probe.mode,
+                                geo = geo,
+                            )
+                        }
+                    }.awaitAll()
+                }
+            } catch (e: Exception) {
+                _uiMessages.tryEmit(appCtx.getString(R.string.cloud_fetch_error, e.message ?: "unknown"))
+            } finally {
+                _cloudLoading.value = false
             }
         }
     }

@@ -48,6 +48,15 @@
     <string name="configs_cloud_probe_fmt">Probe %1$s • IPv6 %2$s • Mode %3$s</string>
     <string name="configs_cloud_connect">Connect</string>
     <string name="configs_connect_cd">Connect %1$s</string>
+    <string name="configs_screen_hint">Local files and cloud list. Cards show ping, country, ASN.</string>
+    <string name="config_card_ping_ms">%1$d ms</string>
+    <string name="config_card_ping_na">no ping</string>
+    <string name="config_chip_probe_ok">probe OK</string>
+    <string name="config_chip_probe_fail">probe fail</string>
+    <string name="config_chip_ipv6_y">IPv6</string>
+    <string name="config_chip_ipv6_n">IPv4 only</string>
+    <string name="config_cd_edit">Edit</string>
+    <string name="config_delete">Delete</string>
 
     <string name="logs_title">Logs</string>
     <string name="logs_empty">No logs yet. Connect from Configs first.</string>

@@ -16,11 +16,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,9 +42,10 @@ import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.ProtectionOptions
 import dev.c0redev.pteraandroid.theme.PteraSpacing
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
-import dev.c0redev.pteraandroid.ui.components.SectionCard
+import dev.c0redev.pteraandroid.ui.components.ConfigProfileCard
 import dev.c0redev.pteraandroid.ui.components.StyledTextField
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val localItems = vm.localConfigs.collectAsState().value
@@ -64,11 +66,12 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     ) {
         Text(
             text = stringResource(R.string.configs_title),
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = stringResource(R.string.configs_local_subtitle),
+            text = stringResource(R.string.configs_screen_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -99,7 +102,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
             }
         }
 
-        TabRow(selectedTabIndex = tabIndex) {
+        PrimaryTabRow(selectedTabIndex = tabIndex) {
             Tab(
                 selected = tabIndex == 0,
                 onClick = { tabIndex = 0 },
@@ -128,56 +131,17 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     }
                 }
                 items(localItems, key = { it.name }) { it ->
-                    SectionCard {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(
-                                text = it.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = it.config.server,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                text = stringResource(
-                                    R.string.configs_ping_fmt,
-                                    it.pingMs?.toString() ?: "-",
-                                    it.probeOk.toString(),
-                                    it.ipv6Support.toString(),
-                                    it.serverMode,
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Button(
-                                    onClick = { vm.connect(it.name, it.config) },
-                                    shape = RoundedCornerShape(12.dp),
-                                ) {
-                                    Text(stringResource(R.string.configs_connect))
-                                }
-                                TextButton(
-                                    onClick = {
-                                        editorOldName = it.name
-                                        editorCfg = it.config
-                                        editorOpen = true
-                                    },
-                                ) {
-                                    Text("Edit")
-                                }
-                                TextButton(
-                                    onClick = { vm.deleteLocalConfig(it.name) },
-                                ) {
-                                    Text("Delete", color = MaterialTheme.colorScheme.error)
-                                }
-                            }
-                        }
-                    }
+                    ConfigProfileCard(
+                        item = it,
+                        primaryLabel = stringResource(R.string.configs_connect),
+                        onPrimary = { vm.connect(it.name, it.config) },
+                        onEdit = {
+                            editorOldName = it.name
+                            editorCfg = it.config
+                            editorOpen = true
+                        },
+                        onDelete = { vm.deleteLocalConfig(it.name) },
+                    )
                 }
             }
             1 -> LazyColumn(
@@ -217,55 +181,21 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     }
                 }
                 items(cloudItems, key = { it.name }) { item ->
-                    SectionCard {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(
-                                text = item.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.SemiBold,
+                    ConfigProfileCard(
+                        item = item,
+                        primaryLabel = stringResource(R.string.configs_cloud_connect),
+                        onPrimary = {
+                            vm.connect(
+                                item.name,
+                                item.config,
+                                applyCloudDefaults = true,
+                                cloudServerMode = item.serverMode,
+                                cloudProbeIpv6 = item.ipv6Support,
                             )
-                            Text(
-                                text = item.config.server,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            Text(
-                                text = stringResource(R.string.configs_cloud_ping, item.pingMs?.toString() ?: "-"),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                            )
-                            Text(
-                                text = stringResource(R.string.configs_cloud_transport, item.config.transportSummary()),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = stringResource(
-                                    R.string.configs_cloud_probe_fmt,
-                                    item.probeOk.toString(),
-                                    item.ipv6Support.toString(),
-                                    item.serverMode,
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Button(
-                                onClick = {
-                                    vm.connect(
-                                        item.name,
-                                        item.config,
-                                        applyCloudDefaults = true,
-                                        cloudServerMode = item.serverMode,
-                                        cloudProbeIpv6 = item.ipv6Support,
-                                    )
-                                },
-                                modifier = Modifier.padding(top = 4.dp),
-                                shape = RoundedCornerShape(12.dp),
-                            ) {
-                                Text(stringResource(R.string.configs_cloud_connect))
-                            }
-                        }
-                    }
+                        },
+                        onEdit = null,
+                        onDelete = null,
+                    )
                 }
             }
         }
