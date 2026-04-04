@@ -23,13 +23,19 @@ import dev.c0redev.pteraandroid.data.repo.LocalConfigRepository
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.SessionRecord
+import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.update.UpdateManager
 import dev.c0redev.pteraandroid.update.UpdatePrefs
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -98,6 +104,15 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private val _remoteReleaseTag = MutableStateFlow<String?>(UpdatePrefs.getRemoteReleaseTag(appCtx))
     val remoteReleaseTag = _remoteReleaseTag
 
+    private val _cloudLoading = MutableStateFlow(false)
+    val cloudLoading = _cloudLoading.asStateFlow()
+
+    private val _uiMessages = MutableSharedFlow<String>(
+        extraBufferCapacity = 32,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val uiMessages: SharedFlow<String> = _uiMessages.asSharedFlow()
+
     private data class MetricDraft(
         val start: Instant,
         val configName: String,
@@ -126,6 +141,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 if (!hideNoSession) {
                     _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = normalized)
                     _logs.value = (_logs.value + listOf("ERR\t$normalized")).takeLast(500)
+                    _uiMessages.tryEmit(normalized)
                     val draft = activeMetric
                     if (draft != null) finalizeActiveMetric(Instant.now(), handshakeOk = draft.handshakeOk, errorType = classifyErr(normalized))
                 } else {
@@ -389,11 +405,19 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { updateManager.checkAndInstall(appCtx, BuildConfig.VERSION_NAME) }
                 .onSuccess {
                     _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
-                    _updateStatus.value = if (it) "Установка запущена" else "Новых обновлений нет"
+                    val msg = if (it) {
+                        appCtx.getString(R.string.update_install_started)
+                    } else {
+                        appCtx.getString(R.string.update_none)
+                    }
+                    _updateStatus.value = msg
+                    _uiMessages.tryEmit(msg)
                 }
                 .onFailure {
                     _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
-                    _updateStatus.value = "Ошибка: ${it.message ?: "unknown"}"
+                    val msg = appCtx.getString(R.string.update_error_fmt, it.message ?: "unknown")
+                    _updateStatus.value = msg
+                    _uiMessages.tryEmit(msg)
                 }
         }
     }

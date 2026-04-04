@@ -1,4 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ptera-vpn</string>
-</resources>
 
+    <string name="nav_home">Home</string>
+    <string name="nav_configs">Configs</string>
+    <string name="nav_logs">Logs</string>
+    <string name="nav_protection">Protect</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="home_title">Ptera VPN</string>
+    <string name="home_subtitle">by c0redev (maxkrya)</string>
+    <string name="home_version_fmt">v%1$s</string>
+    <string name="home_guide_title">Where to tap</string>
+    <string name="home_guide_summary">Expand a row for steps. Open section switches the tab below.</string>
+    <string name="home_guide_open">Open section</string>
+    <string name="home_guide_footer">Client and core, c0redev (maxkrya). If it fails, check Logs and the error in status above.</string>
+    <string name="home_status_title">Connection status</string>
+    <string name="home_mode">Mode</string>
+    <string name="home_connected">Connected</string>
+    <string name="home_ready">Ready</string>
+    <string name="home_yes">Yes</string>
+    <string name="home_no">No</string>
+    <string name="home_error_fmt">Error: %1$s</string>
+    <string name="home_refresh">Refresh</string>
+    <string name="home_disconnect">Disconnect</string>
+    <string name="home_summary">Summary</string>
+    <string name="home_local_configs">Local configs</string>
+    <string name="home_cloud_configs">Cloud configs</string>
+    <string name="home_logs_buffer">Log lines in buffer</string>
+    <string name="home_recent_logs">Recent logs</string>
+    <string name="home_disconnect_cd">Disconnect VPN</string>
+    <string name="home_refresh_cd">Refresh configs</string>
+
+    <string name="configs_title">Configurations</string>
+    <string name="configs_local_subtitle">Local JSON</string>
+    <string name="configs_tab_local">Local</string>
+    <string name="configs_tab_cloud">Cloud</string>
+    <string name="configs_add">Add</string>
+    <string name="configs_connect">Connect</string>
+    <string name="configs_empty_local">No local configs. Tap Add.</string>
+    <string name="configs_empty_cloud">Cloud list is empty. Pull to refresh or check cloud-config.</string>
+    <string name="configs_cloud_refresh">Refresh cloud</string>
+    <string name="configs_cloud_loading">Loading cloud…</string>
+    <string name="configs_ping_fmt">ping=%1$sms • probe=%2$s • ipv6=%3$s • mode=%4$s</string>
+    <string name="configs_cloud_ping">Ping %1$s ms</string>
+    <string name="configs_cloud_transport">Transport %1$s</string>
+    <string name="configs_cloud_probe_fmt">Probe %1$s • IPv6 %2$s • Mode %3$s</string>
+    <string name="configs_cloud_connect">Connect</string>
+    <string name="configs_connect_cd">Connect %1$s</string>
+
+    <string name="logs_title">Logs</string>
+    <string name="logs_empty">No logs yet. Connect from Configs first.</string>
+    <string name="logs_search_hint">Search</string>
+    <string name="logs_filter_all">All</string>
+    <string name="logs_copy_all">Copy all</string>
+    <string name="logs_pin_bottom">Stick to bottom</string>
+    <string name="logs_copied">Copied to clipboard</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="protection_title">Protection</string>
+
+    <string name="common_cd_nav">Navigation: %1$s</string>
+    <string name="disabled_not_connected">Nothing to disconnect</string>
+    <string name="cloud_fetch_error">Cloud fetch failed: %1$s</string>
+    <string name="update_install_started">Install started</string>
+    <string name="update_none">No new updates</string>
+    <string name="update_error_fmt">Error: %1$s</string>
+
+    <string-array name="guide_configs_steps">
+        <item>Open the Configs tab.</item>
+        <item>Local: Add, enter host:port:key, save.</item>
+        <item>Switch to the Cloud tab, Refresh cloud, then Connect on a card.</item>
+        <item>Edit or Delete on the card.</item>
+    </string-array>
+    <string-array name="guide_protection_steps">
+        <item>Open Protect tab.</item>
+        <item>Pick Balance, Strong, or Auto from session metrics.</item>
+        <item>Set obfuscation, junk, pad if needed.</item>
+        <item>Save or Clear at the bottom.</item>
+    </string-array>
+    <string-array name="guide_logs_steps">
+        <item>Open Logs tab.</item>
+        <item>Empty until you Connect from Configs.</item>
+        <item>Scroll, filter by tag, search text.</item>
+    </string-array>
+    <string-array name="guide_settings_steps">
+        <item>Open Settings tab.</item>
+        <item>TUN or Proxy; for proxy set listen.</item>
+        <item>In TUN: IPv6, transport, dual tun-tcp.</item>
+        <item>Save. Updates: Check for updates.</item>
+    </string-array>
+    <string name="home_guide_configs_hint">Local JSON and cloud list in one place.</string>
+    <string name="home_guide_protection_hint">Global protection presets.</string>
+    <string name="home_guide_logs_hint">Core log lines with tags.</string>
+    <string name="home_guide_settings_hint">Mode and updates.</string>
+</resources>

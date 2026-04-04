@@ -1,6 +1,7 @@
 package dev.c0redev.pteraandroid.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,124 +11,259 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.Config
 import dev.c0redev.pteraandroid.domain.model.ProtectionOptions
+import dev.c0redev.pteraandroid.theme.PteraSpacing
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.SectionCard
 import dev.c0redev.pteraandroid.ui.components.StyledTextField
 
 @Composable
 fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
-    val items = vm.localConfigs.collectAsState().value
+    val localItems = vm.localConfigs.collectAsState().value
+    val cloudItems = vm.cloudConfigs.collectAsState().value
+    val cloudLoading = vm.cloudLoading.collectAsState().value
     val conn = vm.connection.collectAsState().value
+    var tabIndex by remember { mutableIntStateOf(0) }
 
     var editorOpen by remember { mutableStateOf(false) }
     var editorOldName by remember { mutableStateOf<String?>(null) }
     var editorCfg by remember { mutableStateOf<Config?>(null) }
 
-    LazyColumn(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
+            .padding(horizontal = PteraSpacing.screenHorizontal, vertical = PteraSpacing.screenVertical),
     ) {
-        item {
-            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Конфигурации",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Text(
-                    text = "Локальные JSON",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+        Text(
+            text = stringResource(R.string.configs_title),
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Text(
+            text = stringResource(R.string.configs_local_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                onClick = {
+                    editorOldName = null
+                    editorCfg = null
+                    editorOpen = true
+                },
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(stringResource(R.string.configs_add))
+            }
+            if (conn.connected) {
+                FilledTonalButton(
+                    onClick = { vm.disconnect() },
+                    shape = RoundedCornerShape(12.dp),
                 ) {
-                    Button(
-                        onClick = {
-                            editorOldName = null
-                            editorCfg = null
-                            editorOpen = true
-                        },
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                    ) {
-                        Text("Добавить")
+                    Text(stringResource(R.string.home_disconnect))
+                }
+            }
+        }
+
+        TabRow(selectedTabIndex = tabIndex) {
+            Tab(
+                selected = tabIndex == 0,
+                onClick = { tabIndex = 0 },
+                text = { Text(stringResource(R.string.configs_tab_local)) },
+            )
+            Tab(
+                selected = tabIndex == 1,
+                onClick = { tabIndex = 1 },
+                text = { Text(stringResource(R.string.configs_tab_cloud)) },
+            )
+        }
+
+        when (tabIndex) {
+            0 -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(PteraSpacing.sectionGap),
+            ) {
+                if (localItems.isEmpty()) {
+                    item {
+                        Text(
+                            text = stringResource(R.string.configs_empty_local),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
                     }
-                    if (conn.connected) {
-                        androidx.compose.material3.FilledTonalButton(
-                            onClick = { vm.disconnect() },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                        ) {
-                            Text("Отключить")
+                }
+                items(localItems, key = { it.name }) { it ->
+                    SectionCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                text = it.name,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = it.config.server,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.configs_ping_fmt,
+                                    it.pingMs?.toString() ?: "-",
+                                    it.probeOk.toString(),
+                                    it.ipv6Support.toString(),
+                                    it.serverMode,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Button(
+                                    onClick = { vm.connect(it.name, it.config) },
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Text(stringResource(R.string.configs_connect))
+                                }
+                                TextButton(
+                                    onClick = {
+                                        editorOldName = it.name
+                                        editorCfg = it.config
+                                        editorOpen = true
+                                    },
+                                ) {
+                                    Text("Edit")
+                                }
+                                TextButton(
+                                    onClick = { vm.deleteLocalConfig(it.name) },
+                                ) {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-        items(items, key = { it.name }) { it ->
-            SectionCard {
-                Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = it.name,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = it.config.server,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = "ping=${it.pingMs ?: "-"}ms  •  probe=${it.probeOk}  •  ipv6=${it.ipv6Support}  •  mode=${it.serverMode}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            1 -> LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(PteraSpacing.sectionGap),
+            ) {
+                item {
+                    Button(
+                        onClick = { vm.refreshCloudConfigs(true) },
+                        shape = RoundedCornerShape(12.dp),
                     ) {
-                        Button(
-                            onClick = { vm.connect(it.name, it.config) },
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                        ) {
-                            Text("Connect")
+                        Text(stringResource(R.string.configs_cloud_refresh))
+                    }
+                }
+                if (cloudLoading) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                CircularProgressIndicator()
+                                Text(
+                                    stringResource(R.string.configs_cloud_loading),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
-                        TextButton(
-                            onClick = {
-                                editorOldName = it.name
-                                editorCfg = it.config
-                                editorOpen = true
-                            },
-                        ) {
-                            Text("Edit")
-                        }
-                        TextButton(
-                            onClick = { vm.deleteLocalConfig(it.name) },
-                        ) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                if (!cloudLoading && cloudItems.isEmpty()) {
+                    item {
+                        Text(
+                            text = stringResource(R.string.configs_empty_cloud),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+                items(cloudItems, key = { it.name }) { item ->
+                    SectionCard {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                text = item.name,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = item.config.server,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = stringResource(R.string.configs_cloud_ping, item.pingMs?.toString() ?: "-"),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                            Text(
+                                text = stringResource(R.string.configs_cloud_transport, item.config.transportSummary()),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.configs_cloud_probe_fmt,
+                                    item.probeOk.toString(),
+                                    item.ipv6Support.toString(),
+                                    item.serverMode,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(
+                                onClick = {
+                                    vm.connect(
+                                        item.name,
+                                        item.config,
+                                        applyCloudDefaults = true,
+                                        cloudServerMode = item.serverMode,
+                                        cloudProbeIpv6 = item.ipv6Support,
+                                    )
+                                },
+                                modifier = Modifier.padding(top = 4.dp),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text(stringResource(R.string.configs_cloud_connect))
+                            }
                         }
                     }
                 }

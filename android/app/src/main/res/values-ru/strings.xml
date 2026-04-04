@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_home">Главная</string>
+    <string name="nav_configs">Конфиги</string>
+    <string name="nav_logs">Логи</string>
+    <string name="nav_protection">Защита</string>
+    <string name="nav_settings">Настройки</string>
+
+    <string name="home_title">Ptera VPN</string>
+    <string name="home_subtitle">от c0redev (maxkrya)</string>
+    <string name="home_version_fmt">v%1$s</string>
+    <string name="home_guide_title">Куда тыкать</string>
+    <string name="home_guide_summary">Строка раскрывает шаги. «Открыть раздел» переключает нижнюю панель.</string>
+    <string name="home_guide_open">Открыть раздел</string>
+    <string name="home_guide_footer">Клиент и ядро, c0redev (maxkrya). Не взлетело — смотри Логи и ошибку в статусе выше.</string>
+    <string name="home_status_title">Статус подключения</string>
+    <string name="home_mode">Режим</string>
+    <string name="home_connected">Подключено</string>
+    <string name="home_ready">Готов</string>
+    <string name="home_yes">Да</string>
+    <string name="home_no">Нет</string>
+    <string name="home_error_fmt">Ошибка: %1$s</string>
+    <string name="home_refresh">Обновить</string>
+    <string name="home_disconnect">Отключить</string>
+    <string name="home_summary">Сводка</string>
+    <string name="home_local_configs">Локальные конфиги</string>
+    <string name="home_cloud_configs">Cloud конфиги</string>
+    <string name="home_logs_buffer">Логов в буфере</string>
+    <string name="home_recent_logs">Последние логи</string>
+    <string name="home_disconnect_cd">Отключить VPN</string>
+    <string name="home_refresh_cd">Обновить конфиги</string>
+
+    <string name="configs_title">Конфигурации</string>
+    <string name="configs_local_subtitle">Локальные JSON</string>
+    <string name="configs_tab_local">Локальные</string>
+    <string name="configs_tab_cloud">Облако</string>
+    <string name="configs_add">Добавить</string>
+    <string name="configs_connect">Connect</string>
+    <string name="configs_empty_local">Нет локальных конфигов. Нажми «Добавить».</string>
+    <string name="configs_empty_cloud">Список cloud пуст. Обнови или проверь cloud-config.</string>
+    <string name="configs_cloud_refresh">Обновить cloud</string>
+    <string name="configs_cloud_loading">Загрузка cloud…</string>
+    <string name="configs_ping_fmt">ping=%1$sms • probe=%2$s • ipv6=%3$s • mode=%4$s</string>
+    <string name="configs_cloud_ping">Ping %1$s ms</string>
+    <string name="configs_cloud_transport">Транспорт %1$s</string>
+    <string name="configs_cloud_probe_fmt">Probe %1$s • IPv6 %2$s • Mode %3$s</string>
+    <string name="configs_cloud_connect">Подключить</string>
+    <string name="configs_connect_cd">Подключить %1$s</string>
+
+    <string name="logs_title">Логи</string>
+    <string name="logs_empty">Пока пусто. Сначала подключись из Конфигов.</string>
+    <string name="logs_search_hint">Поиск</string>
+    <string name="logs_filter_all">Все</string>
+    <string name="logs_copy_all">Копировать всё</string>
+    <string name="logs_pin_bottom">К низу</string>
+    <string name="logs_copied">Скопировано</string>
+
+    <string name="settings_title">Настройки</string>
+    <string name="protection_title">Защита</string>
+
+    <string name="common_cd_nav">Навигация: %1$s</string>
+    <string name="disabled_not_connected">Нечего отключать</string>
+    <string name="cloud_fetch_error">Ошибка cloud: %1$s</string>
+    <string name="update_install_started">Установка запущена</string>
+    <string name="update_none">Новых обновлений нет</string>
+    <string name="update_error_fmt">Ошибка: %1$s</string>
+
+    <string-array name="guide_configs_steps">
+        <item>Внизу вкладка Конфиги.</item>
+        <item>Локальные: Добавить, в диалоге server:token, сохрани.</item>
+        <item>Вкладка Облако: Обновить cloud, на карточке Подключить.</item>
+        <item>Edit или Delete на карточке.</item>
+    </string-array>
+    <string-array name="guide_protection_steps">
+        <item>Внизу Защита.</item>
+        <item>Баланс, Усиленная или Авто по метрикам сессий.</item>
+        <item>Поля obfuscation, junk, pad при необходимости.</item>
+        <item>Сохранить или Очистить внизу.</item>
+    </string-array>
+    <string-array name="guide_logs_steps">
+        <item>Внизу Логи.</item>
+        <item>Пусто пока не было Connect. Сначала Конфиги.</item>
+        <item>Фильтр по тегу, поиск, копирование.</item>
+    </string-array>
+    <string-array name="guide_settings_steps">
+        <item>Внизу Настройки.</item>
+        <item>TUN или Proxy, у proxy поле listen.</item>
+        <item>В tun IPv6, транспорт, dual tun-tcp.</item>
+        <item>Сохранить. Обновления, кнопка проверки.</item>
+    </string-array>
+    <string name="home_guide_configs_hint">Локальные JSON и cloud в одной вкладке.</string>
+    <string name="home_guide_protection_hint">Глобальный protection.</string>
+    <string name="home_guide_logs_hint">Строки ядра с тегами.</string>
+    <string name="home_guide_settings_hint">Режим и обновления.</string>
+</resources>

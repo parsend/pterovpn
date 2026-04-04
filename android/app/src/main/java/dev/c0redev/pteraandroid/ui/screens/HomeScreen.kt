@@ -1,6 +1,8 @@
 package dev.c0redev.pteraandroid.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,7 +28,6 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
@@ -39,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,11 +48,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringArrayResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.c0redev.pteraandroid.BuildConfig
+import dev.c0redev.pteraandroid.R
+import dev.c0redev.pteraandroid.theme.PteraSpacing
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.SectionCard
 
@@ -73,29 +82,44 @@ fun HomeScreen(
     val logs = vm.logs.collectAsState().value
     val local = vm.localConfigs.collectAsState().value
     val cloud = vm.cloudConfigs.collectAsState().value
+    val haptic = LocalHapticFeedback.current
+    var prevReady by remember { mutableStateOf(false) }
+
+    LaunchedEffect(conn.ready) {
+        if (conn.ready && !prevReady) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        prevReady = conn.ready
+    }
+
+    val pulse by animateFloatAsState(
+        targetValue = if (conn.connected) 1.02f else 1f,
+        animationSpec = tween(280),
+        label = "connPulse",
+    )
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(horizontal = PteraSpacing.screenHorizontal, vertical = PteraSpacing.screenVertical),
+        verticalArrangement = Arrangement.spacedBy(PteraSpacing.sectionGap),
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Ptera VPN",
+                    text = stringResource(R.string.home_title),
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(
-                    text = "by c0redev (maxkrya)",
+                    text = stringResource(R.string.home_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
                 )
                 Text(
-                    text = "v${BuildConfig.VERSION_NAME}",
+                    text = stringResource(R.string.home_version_fmt, BuildConfig.VERSION_NAME),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -107,7 +131,7 @@ fun HomeScreen(
         }
 
         item {
-            SectionCard {
+            SectionCard(modifier = Modifier.scale(pulse)) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -120,7 +144,7 @@ fun HomeScreen(
                             modifier = Modifier.size(24.dp),
                         )
                         Text(
-                            text = "Статус подключения",
+                            text = stringResource(R.string.home_status_title),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -128,13 +152,20 @@ fun HomeScreen(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    StatusRow(label = "Режим", value = conn.mode ?: settings.mode)
-                    StatusRow(label = "Подключено", value = if (conn.connected) "Да" else "Нет")
-                    StatusRow(label = "Готов", value = if (conn.ready) "Да" else "Нет")
+                    StatusRow(label = stringResource(R.string.home_mode), value = conn.mode ?: settings.mode)
+                    StatusRow(
+                        label = stringResource(R.string.home_connected),
+                        value = if (conn.connected) stringResource(R.string.home_yes) else stringResource(R.string.home_no),
+                    )
+                    StatusRow(
+                        label = stringResource(R.string.home_ready),
+                        value = if (conn.ready) stringResource(R.string.home_yes) else stringResource(R.string.home_no),
+                    )
 
-                    if (!conn.error.isNullOrBlank()) {
+                    val err = conn.error
+                    if (!err.isNullOrBlank()) {
                         Text(
-                            text = "Ошибка: ${conn.error}",
+                            text = stringResource(R.string.home_error_fmt, err),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(top = 4.dp),
@@ -148,19 +179,26 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         FilledTonalButton(
-                            onClick = { vm.refreshLocalConfigs(); vm.refreshCloudConfigs(true) },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                vm.refreshLocalConfigs()
+                                vm.refreshCloudConfigs(true)
+                            },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = null,
+                                contentDescription = stringResource(R.string.home_refresh_cd),
                                 modifier = Modifier.size(18.dp),
                             )
-                            Text("Обновить", modifier = Modifier.padding(start = 8.dp))
+                            Text(stringResource(R.string.home_refresh), modifier = Modifier.padding(start = 8.dp))
                         }
                         Button(
-                            onClick = { vm.disconnect() },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                vm.disconnect()
+                            },
                             enabled = conn.connected,
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
@@ -171,11 +209,19 @@ fun HomeScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Stop,
-                                contentDescription = null,
+                                contentDescription = stringResource(R.string.home_disconnect_cd),
                                 modifier = Modifier.size(18.dp),
                             )
-                            Text("Отключить", modifier = Modifier.padding(start = 8.dp))
+                            Text(stringResource(R.string.home_disconnect), modifier = Modifier.padding(start = 8.dp))
                         }
+                    }
+                    if (!conn.connected) {
+                        Text(
+                            text = stringResource(R.string.disabled_not_connected),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                 }
             }
@@ -185,14 +231,14 @@ fun HomeScreen(
             SectionCard {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "Сводка",
+                        text = stringResource(R.string.home_summary),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    InfoRow(label = "Локальные конфиги", value = local.size.toString())
-                    InfoRow(label = "Cloud конфиги", value = cloud.size.toString())
-                    InfoRow(label = "Логов в буфере", value = logs.size.toString())
+                    InfoRow(label = stringResource(R.string.home_local_configs), value = local.size.toString())
+                    InfoRow(label = stringResource(R.string.home_cloud_configs), value = cloud.size.toString())
+                    InfoRow(label = stringResource(R.string.home_logs_buffer), value = logs.size.toString())
                 }
             }
         }
@@ -202,7 +248,7 @@ fun HomeScreen(
                 SectionCard {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = "Последние логи",
+                            text = stringResource(R.string.home_recent_logs),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -210,7 +256,7 @@ fun HomeScreen(
                         logs.takeLast(5).forEach { log ->
                             Text(
                                 text = log,
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -263,79 +309,47 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun HomeGuideCard(onNavigateToTab: (String) -> Unit) {
-    val entries = remember {
-        listOf(
-            GuideEntry(
-                title = "Configs",
-                hint = "Локальные профили, кнопка Connect.",
-                steps = listOf(
-                    "Внизу нажми вкладку Configs.",
-                    "Добавить, в диалоге server:token, сохрани.",
-                    "На карточке Connect. Режим TUN даст запрос VPN.",
-                    "Edit или Delete на карточке.",
-                ),
-                route = "configs",
-                icon = Icons.Outlined.Dns,
-            ),
-            GuideEntry(
-                title = "Cloud",
-                hint = "Список из cloud-config.",
-                steps = listOf(
-                    "Внизу Cloud.",
-                    "Обновить cloud, дождись карточек.",
-                    "На карточке Подключить.",
-                ),
-                route = "cloud",
-                icon = Icons.Outlined.Cloud,
-            ),
-            GuideEntry(
-                title = "Protect",
-                hint = "Глобальный protection.",
-                steps = listOf(
-                    "Внизу Protect.",
-                    "Баланс, Усиленная или Авто по метрикам сессий.",
-                    "Поля obfuscation, junk, pad при необходимости.",
-                    "Сохранить или Очистить внизу.",
-                ),
-                route = "protection",
-                icon = Icons.Outlined.Security,
-            ),
-            GuideEntry(
-                title = "Logs",
-                hint = "Ядро, тег в квадратных скобках.",
-                steps = listOf(
-                    "Внизу Logs.",
-                    "Пусто пока не было Connect. Сначала Configs или Cloud.",
-                    "Листай, смотри ERR, DPI, DROP.",
-                ),
-                route = "logs",
-                icon = Icons.AutoMirrored.Outlined.ReceiptLong,
-            ),
-            GuideEntry(
-                title = "Settings",
-                hint = "Режим и обновления.",
-                steps = listOf(
-                    "Внизу Settings.",
-                    "TUN или Proxy, у proxy поле listen.",
-                    "В tun IPv6, транспорт, dual tun-tcp.",
-                    "Сохранить. Обновления, кнопка Проверить обновления.",
-                ),
-                route = "settings",
-                icon = Icons.Outlined.Settings,
-            ),
-        )
-    }
+    val entries = listOf(
+        GuideEntry(
+            title = stringResource(R.string.nav_configs),
+            hint = stringResource(R.string.home_guide_configs_hint),
+            steps = stringArrayResource(R.array.guide_configs_steps).toList(),
+            route = "configs",
+            icon = Icons.Outlined.Dns,
+        ),
+        GuideEntry(
+            title = stringResource(R.string.nav_protection),
+            hint = stringResource(R.string.home_guide_protection_hint),
+            steps = stringArrayResource(R.array.guide_protection_steps).toList(),
+            route = "protection",
+            icon = Icons.Outlined.Security,
+        ),
+        GuideEntry(
+            title = stringResource(R.string.nav_logs),
+            hint = stringResource(R.string.home_guide_logs_hint),
+            steps = stringArrayResource(R.array.guide_logs_steps).toList(),
+            route = "logs",
+            icon = Icons.AutoMirrored.Outlined.ReceiptLong,
+        ),
+        GuideEntry(
+            title = stringResource(R.string.nav_settings),
+            hint = stringResource(R.string.home_guide_settings_hint),
+            steps = stringArrayResource(R.array.guide_settings_steps).toList(),
+            route = "settings",
+            icon = Icons.Outlined.Settings,
+        ),
+    )
     var openRoute by remember { mutableStateOf<String?>(null) }
 
     SectionCard {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "Куда тыкать",
+                text = stringResource(R.string.home_guide_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Строка раскрывает шаги. Открыть раздел переключает нижнюю панель.",
+                text = stringResource(R.string.home_guide_summary),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -358,7 +372,7 @@ private fun HomeGuideCard(onNavigateToTab: (String) -> Unit) {
                     ) {
                         Icon(
                             imageVector = e.icon,
-                            contentDescription = null,
+                            contentDescription = e.title,
                             modifier = Modifier.size(22.dp),
                             tint = MaterialTheme.colorScheme.primary,
                         )
@@ -403,7 +417,7 @@ private fun HomeGuideCard(onNavigateToTab: (String) -> Unit) {
                                 },
                                 shape = RoundedCornerShape(10.dp),
                             ) {
-                                Text("Открыть раздел")
+                                Text(stringResource(R.string.home_guide_open))
                             }
                         }
                     }
@@ -412,7 +426,7 @@ private fun HomeGuideCard(onNavigateToTab: (String) -> Unit) {
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             Text(
-                text = "Клиент и ядро, c0redev (maxkrya). Не взлетело, смотри Logs и Ошибка в статусе выше.",
+                text = stringResource(R.string.home_guide_footer),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

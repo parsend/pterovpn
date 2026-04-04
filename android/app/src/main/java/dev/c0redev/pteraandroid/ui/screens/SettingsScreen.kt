@@ -33,8 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.c0redev.pteraandroid.BuildConfig
+import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
 import dev.c0redev.pteraandroid.ui.components.SectionCard
@@ -74,7 +76,7 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "Настройки",
+            text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onBackground,
         )

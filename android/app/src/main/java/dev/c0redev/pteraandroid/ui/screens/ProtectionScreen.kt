@@ -22,7 +22,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.ProtectionOptions
 import dev.c0redev.pteraandroid.domain.model.ProtectionPresets
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
@@ -82,7 +84,7 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     ) {
         item {
             Text(
-                text = "Protection",
+                text = stringResource(R.string.protection_title),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
             )
