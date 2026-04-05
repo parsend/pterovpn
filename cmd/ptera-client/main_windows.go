@@ -121,8 +121,10 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 
 	ready := make(chan struct{})
 	errCh := make(chan error, 1)
+	vpnCtx, vpnCancel := context.WithCancel(sigCtx)
+	defer vpnCancel()
 	go func() {
-		errCh <- vpn.Run(sigCtx, vpn.Options{
+		vo := vpn.Options{
 			Device:            dev,
 			MTU:               opts.mtu,
 			Token:             opts.token,
@@ -137,7 +139,25 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			DualTransport:     opts.dualTransport,
 			Ready:             func() { close(ready) },
 			Protection:        opts.protection,
-		})
+		}
+		if opts.watchdogFail != nil {
+			vo.WatchdogInterval = time.Minute
+			vo.WatchdogServerPingTimeout = 2 * time.Second
+			vo.WatchdogHTTPTimeout = 2 * time.Second
+			vo.OnWatchdogFail = func() {
+				if opts.watchdogMark != nil {
+					opts.watchdogMark.Store(true)
+				}
+				if opts.watchdogFail != nil {
+					select {
+					case opts.watchdogFail <- struct{}{}:
+					default:
+					}
+				}
+				vpnCancel()
+			}
+		}
+		errCh <- vpn.Run(vpnCtx, vo)
 	}()
 
 	select {

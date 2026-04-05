@@ -567,6 +567,25 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         startService(fallbackCfg.toJson().toString(), settings.toJson().toString())
     }
 
+    private suspend fun reconnectAfterWatchdog(name: String, cfg: Config, reconnectCount: Int) {
+        PteraLog.w("watchdog reconnectAfterWatchdog name=$name rc=$reconnectCount")
+        _logs.value = (_logs.value + listOf("WARN\tWatchdog: переподключение того же профиля")).takeLast(500)
+        runCatching { appCtx.startService(PteraVpnService.stopIntent(appCtx)) }
+        runCatching { appCtx.stopService(Intent(appCtx, PteraVpnService::class.java)) }
+        delay(300)
+        val settings = localRepo.loadClientSettings()
+        val effective = mergeEffectiveConfig(cfg)
+        beginMetric(name, effective, reconnectCount = reconnectCount)
+        fillMetricBasics(effective)
+        activeConfig = effective
+        activeConfigName = name
+        setActiveProfileUi(name)
+        activeStartedAt = Instant.now()
+        autoFallbackDone = false
+        activateMetric()
+        startService(effective.toJson().toString(), settings.toJson().toString())
+    }
+
     private fun startLogPolling(handle: Long, mode: String?) {
         pollJob?.cancel()
         val gen = ++pollGeneration
@@ -602,7 +621,24 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 if (!state.running) {
-                    if (noSession) {
+                    var handled = false
+                    if (gen == pollGeneration && state.watchdog) {
+                        val c = activeConfig
+                        val n = activeConfigName
+                        if (c != null && n != null) {
+                            handled = true
+                            val rc = (activeMetric?.reconnectCount ?: 0) + 1
+                            finalizeActiveMetric(Instant.now(), state.ready, "watchdog")
+                            pollJob = null
+                            coreHandle = -1
+                            _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = null)
+                            PteraLog.w("watchdog session end, reconnect name=$n rc=$rc")
+                            viewModelScope.launch(Dispatchers.IO) {
+                                reconnectAfterWatchdog(n, c, rc)
+                            }
+                        }
+                    }
+                    if (!handled && noSession) {
                         if (gen == pollGeneration) {
                             coreHandle = -1
                             clearActiveProfileUi()
@@ -612,10 +648,10 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                         } else {
                             PteraLog.i("poll ignore noSession stale gen=$gen current=$pollGeneration handle=$handle")
                         }
-                    } else if (gen == pollGeneration) {
+                    } else if (!handled && gen == pollGeneration) {
                         PteraLog.w("poll exit err=${state.error} ready=${state.ready} handle=$handle")
                     }
-                    if (gen == pollGeneration) {
+                    if (!handled && gen == pollGeneration) {
                         activeMetric?.let { finalizeActiveMetric(Instant.now(), it.handshakeOk || state.ready, classifyErr(state.error)) }
                     }
                     break

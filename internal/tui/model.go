@@ -253,6 +253,38 @@ func NewModel(opts Opts) *Model {
 	return m
 }
 
+func (m *Model) configSnapshotForActive() (config.Config, bool) {
+	name := m.activeCfg
+	if name == "" {
+		return config.Config{}, false
+	}
+	if saved, err := config.LoadByName(name); err == nil {
+		return saved, true
+	}
+	for i, n := range m.names {
+		if n == name {
+			return m.cfgs[i], true
+		}
+	}
+	for i, n := range m.cloudNames {
+		if n != name {
+			continue
+		}
+		cfg := m.cloudCfgs[i]
+		if saved, err := config.LoadByName(n); err == nil && saved.Server == cfg.Server && saved.Token == cfg.Token {
+			cfg = saved
+		}
+		mode := ""
+		if m.cloudMode != nil {
+			mode = m.cloudMode[n]
+		}
+		probeV6 := m.cloudIPv6 != nil && m.cloudIPv6[n]
+		config.ApplyCloudConnectDefaults(&cfg, mode, probeV6)
+		return cfg, true
+	}
+	return config.Config{}, false
+}
+
 func (m *Model) buildItems() []list.Item {
 	items := make([]list.Item, len(m.cfgs))
 	for i := range m.cfgs {
@@ -623,6 +655,8 @@ type connectedMsg struct{ stop func() }
 type disconnectedMsg struct{}
 type errMsg string
 type logMsg string
+
+type WatchdogReconnectMsg struct{}
 
 type pingResultMsg struct {
 	name   string
@@ -1232,6 +1266,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case WatchdogReconnectMsg:
+		if m.opts.ConnectFn == nil || m.status != statusConnected || m.activeCfg == "" {
+			return m, nil
+		}
+		cfg, ok := m.configSnapshotForActive()
+		if !ok {
+			return m, nil
+		}
+		if m.stop != nil {
+			m.stop()
+			m.stop = nil
+		}
+		m.status = statusConnecting
+		m.err = ""
+		m.connectCount++
+		return m, waitConnect(cfg, m.activeCfg, m.connectCount-1, m.clientSettings, m.opts.ConnectFn)
 	case connectedMsg:
 		m.status = statusConnected
 		m.stop = msg.stop

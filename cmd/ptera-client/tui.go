@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,11 +55,19 @@ func runTUI() error {
 		close(logCh)
 	}()
 
+	watchdogCh := make(chan struct{}, 1)
 	opts := tui.Opts{
-		ConnectFn: connectVPN,
-		Version:   version,
+		ConnectFn: func(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error) {
+			return connectVPN(cfg, configName, reconnectCount, settings, watchdogCh)
+		},
+		Version: version,
 	}
 	p := tea.NewProgram(tui.NewModel(opts), tea.WithAltScreen())
+	go func() {
+		for range watchdogCh {
+			p.Send(tui.WatchdogReconnectMsg{})
+		}
+	}()
 	go func() {
 		for line := range logCh {
 			p.Send(tui.LogMessage(line))
@@ -102,7 +111,7 @@ func classifyError(err error) string {
 	return "unknown"
 }
 
-func connectVPN(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings) (stop func(), err error) {
+func connectVPN(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, watchdogFail chan struct{}) (stop func(), err error) {
 	if cfg.Server == "" || cfg.Token == "" {
 		return nil, fmt.Errorf("server и token обязательны")
 	}
@@ -200,6 +209,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		}
 		quicRoots = pool
 	}
+	var watchdogMark atomic.Bool
 	opts := runOpts{
 		serverIP:          sip,
 		token:             cfg.Token,
@@ -229,6 +239,8 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			}
 			return probe.RecommendDualTunTransport(probeCaps, true)
 		}(),
+		watchdogFail: watchdogFail,
+		watchdogMark: &watchdogMark,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -253,6 +265,9 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 			record.End = time.Now()
 			record.Duration = time.Since(start)
 			record.ErrorType = "graceful"
+			if watchdogMark.Swap(false) {
+				record.ErrorType = "watchdog"
+			}
 			record.DNSOKAfter = checkDNS()
 			if store, loadErr := metrics.Load(); loadErr == nil {
 				_ = store.Append(record)

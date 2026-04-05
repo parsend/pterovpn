@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/config"
@@ -51,6 +52,8 @@ type runOpts struct {
 	proxyListen       string
 	systemProxy       bool
 	dualTransport     bool
+	watchdogFail      chan struct{}
+	watchdogMark      *atomic.Bool
 }
 
 func main() {

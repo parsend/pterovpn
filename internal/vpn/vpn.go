@@ -46,6 +46,11 @@ type Options struct {
 	QuicTLSRoots      *x509.CertPool
 	QuicTraceLog      bool
 	DualTransport     bool
+
+	WatchdogInterval          time.Duration
+	WatchdogServerPingTimeout time.Duration
+	WatchdogHTTPTimeout       time.Duration
+	OnWatchdogFail            func()
 }
 
 func Run(ctx context.Context, opt Options) error {
@@ -119,6 +124,9 @@ func Run(ctx context.Context, opt Options) error {
 	clientlog.OK("vpn: netstack ready")
 	if opt.Ready != nil {
 		opt.Ready()
+	}
+	if opt.WatchdogInterval > 0 && opt.OnWatchdogFail != nil {
+		go runWatchdog(ctx, h, opt)
 	}
 	<-ctx.Done()
 	clientlog.Info("vpn: stopping")

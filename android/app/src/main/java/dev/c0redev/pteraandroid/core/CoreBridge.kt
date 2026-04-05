@@ -15,6 +15,7 @@ object CoreBridge {
         val ready: Boolean,
         val running: Boolean,
         val error: String?,
+        val watchdog: Boolean = false,
     )
 
     data class ProbeResult(
@@ -59,11 +60,12 @@ object CoreBridge {
         val err = nullableErr(j, "error")
         val running = j.optBoolean("running", false)
         val ready = j.optBoolean("ready", false)
-        PteraLog.v("pollState h=$handle ready=$ready running=$running err=${err ?: "null"}")
+        val watchdog = j.optBoolean("watchdog", false)
+        PteraLog.v("pollState h=$handle ready=$ready running=$running watchdog=$watchdog err=${err ?: "null"}")
         if (!err.isNullOrBlank() && (err.equals("no session", ignoreCase = true) || err.equals("bad handle", ignoreCase = true))) {
             PteraLog.w("pollState missing session h=$handle (stale handle or core already stopped)")
         }
-        return State(ready = ready, running = running, error = err)
+        return State(ready = ready, running = running, error = err, watchdog = watchdog)
     }
 
     fun pollLogs(handle: Long, max: Int = 200): List<String> {

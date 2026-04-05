@@ -34,9 +34,10 @@ type startResult struct {
 }
 
 type stateResult struct {
-	Ready   bool   `json:"ready"`
-	Running bool   `json:"running"`
-	Error   string `json:"error,omitempty"`
+	Ready    bool   `json:"ready"`
+	Running  bool   `json:"running"`
+	Error    string `json:"error,omitempty"`
+	Watchdog bool   `json:"watchdog,omitempty"`
 }
 
 type probeResult struct {
@@ -87,6 +88,8 @@ type session struct {
 	done chan struct{}
 
 	ready atomic.Bool
+
+	watchdogTriggered atomic.Bool
 
 	logsCh chan string
 
@@ -287,6 +290,13 @@ func StartTun(tunFd int, mtu int, cfgJSON string, configDir string) string {
 		Ready: func() {
 			s.ready.Store(true)
 		},
+		WatchdogInterval:          time.Minute,
+		WatchdogServerPingTimeout: 2 * time.Second,
+		WatchdogHTTPTimeout:       2 * time.Second,
+		OnWatchdogFail: func() {
+			s.watchdogTriggered.Store(true)
+			cancel()
+		},
 	}
 
 	go func() {
@@ -436,9 +446,10 @@ func PollState(handle int64) string {
 	s.stateMu.Unlock()
 
 	return jsonString(stateResult{
-		Ready:   s.ready.Load(),
-		Running: running,
-		Error:   errStr,
+		Ready:    s.ready.Load(),
+		Running:  running,
+		Error:    errStr,
+		Watchdog: s.watchdogTriggered.Load(),
 	})
 }
 
