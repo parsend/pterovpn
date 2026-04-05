@@ -7,9 +7,6 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.logging.Logger;
 
-/**
- * tcp через quic stream: одна пара потоков на upstream
- */
 final class QuicTcpRelay {
   private static final Logger log = Log.logger(QuicTcpRelay.class);
   private static final int BUF = 32 * 1024;

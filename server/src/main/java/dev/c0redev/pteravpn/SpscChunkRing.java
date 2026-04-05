@@ -2,9 +2,6 @@ package dev.c0redev.pteravpn;
 
 import java.util.concurrent.ArrayBlockingQueue;
 
-/**
- * bounded ingress netty -> session thread; по вызовам spsc
- */
 final class SpscChunkRing {
   private final ArrayBlockingQueue<byte[]> q;
 
