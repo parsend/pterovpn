@@ -145,7 +145,6 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 		if opts.watchdogFail != nil {
 			vo.WatchdogInterval = time.Minute
 			vo.WatchdogServerPingTimeout = 2 * time.Second
-			vo.WatchdogHTTPTimeout = 2 * time.Second
 			vo.OnWatchdogFail = func() {
 				if opts.watchdogMark != nil {
 					opts.watchdogMark.Store(true)

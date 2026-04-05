@@ -49,7 +49,6 @@ type Options struct {
 
 	WatchdogInterval          time.Duration
 	WatchdogServerPingTimeout time.Duration
-	WatchdogHTTPTimeout       time.Duration
 	OnWatchdogFail            func()
 }
 

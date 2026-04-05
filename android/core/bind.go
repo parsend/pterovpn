@@ -292,7 +292,6 @@ func StartTun(tunFd int, mtu int, cfgJSON string, configDir string) string {
 		},
 		WatchdogInterval:          time.Minute,
 		WatchdogServerPingTimeout: 2 * time.Second,
-		WatchdogHTTPTimeout:       2 * time.Second,
 		OnWatchdogFail: func() {
 			s.watchdogTriggered.Store(true)
 			cancel()
