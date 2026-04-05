@@ -3,7 +3,6 @@ package tunnel
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"crypto/x509"
 	"net"
 	"strings"
@@ -16,32 +15,6 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
 	"github.com/unitdevgcc/pterovpn/internal/sockprotect"
 )
-
-func tunTCPPreferPlainTCP(port uint16) bool {
-	switch port {
-	case 135, 139, 445, 3389, 5900, 5985, 5986:
-		return true
-	default:
-		return false
-	}
-}
-
-const dualTunQUICStreamByteThreshold = 180
-
-func PickQUICForTunTCPFlow(dstIP net.IP, dstPort uint16) bool {
-	if dstIP == nil || tunTCPPreferPlainTCP(dstPort) {
-		return false
-	}
-	ip := dstIP.To16()
-	if ip == nil {
-		return false
-	}
-	var b []byte
-	b = append(b, ip...)
-	b = append(b, byte(dstPort>>8), byte(dstPort))
-	h := sha256.Sum256(b)
-	return h[0] < dualTunQUICStreamByteThreshold
-}
 
 func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, tunPreferTCP bool) (net.Conn, error) {
 	if !tunPreferTCP && UsesQUICTransport(transport, quicServer) {

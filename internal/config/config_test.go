@@ -73,6 +73,31 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
+func TestParseConnection(t *testing.T) {
+	for _, tc := range []struct {
+		in         string
+		wantServer string
+		wantToken  string
+		ok         bool
+	}{
+		{"1.2.3.4:443:abc:def", "1.2.3.4:443", "abc:def", true},
+		{"[2001:db8::1]:443:tok", "[2001:db8::1]:443", "tok", true},
+		{"[2001:db8::1]:443:abc:def", "[2001:db8::1]:443", "abc:def", true},
+		{"bad format", "", "", false},
+		{"[2001:db8::1]  :443:tok", "", "", false},
+	} {
+		server, token, ok := ParseConnection(tc.in)
+		if ok != tc.ok {
+			t.Fatalf("ParseConnection(%q) ok=%v want %v", tc.in, ok, tc.ok)
+		}
+		if ok {
+			if server != tc.wantServer || token != tc.wantToken {
+				t.Fatalf("ParseConnection(%q)=%q %q want %q %q", tc.in, server, token, tc.wantServer, tc.wantToken)
+			}
+		}
+	}
+}
+
 func TestProtection(t *testing.T) {
 	dir := t.TempDir()
 	os.Setenv("XDG_CONFIG_HOME", dir)

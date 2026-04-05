@@ -95,20 +95,32 @@ func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOpti
 	return protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot)
 }
 
-func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, dual bool) (net.Conn, bool, error) {
+func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, dual bool, sel *DualPathSelector) (net.Conn, bool, bool, error) {
 	preferTCP := false
 	if dual && quicShared != nil && UsesQUICTransport(transport, quicServer) {
-		preferTCP = !PickQUICForTunTCPFlow(dst, dstPort)
+		if sel != nil {
+			preferTCP = !sel.PreferQUIC()
+		}
 	}
-	c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, preferTCP)
-	if err != nil && dual && quicShared != nil && !preferTCP {
+	if preferTCP {
+		c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true)
+		return c, false, true, err
+	}
+	c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, false)
+	if err != nil && dual && quicShared != nil {
+		if sel != nil {
+			sel.RecordQuicOutcome(false)
+		}
 		quicErr := err
 		if quicTraceOn() {
 			clientlog.Trace("tun tcp quic dial failed, fallback tcp: %v", quicErr)
 		}
 		clientlog.Warn("vpn: tun-tcp QUIC path failed, fallback TCP: %v", quicErr)
 		c, err = Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true)
-		return c, true, err
+		return c, true, false, err
 	}
-	return c, false, err
+	if err == nil && sel != nil {
+		sel.RecordQuicOutcome(true)
+	}
+	return c, false, false, err
 }

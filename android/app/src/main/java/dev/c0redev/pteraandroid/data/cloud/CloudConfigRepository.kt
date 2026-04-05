@@ -19,6 +19,11 @@ data class CloudConfigItem(
 class CloudConfigRepository(private val context: Context) {
     private val baseDir = File(context.filesDir, "ptera-vpn")
     private val cloudFile = File(baseDir, "cloud-config.txt")
+    private val cloudConfigUrls = listOf(
+        "https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/mew/cloud-config.txt",
+        "https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/main/cloud-config.txt",
+        "https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/master/cloud-config.txt",
+    )
 
     private fun loadRaw(fetch: Boolean): String {
         if (fetch) {
@@ -76,20 +81,34 @@ class CloudConfigRepository(private val context: Context) {
     }
 
     private fun fetchCloudRaw(): String {
-        val url = URL("https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/mew/cloud-config.txt")
-        val conn = url.openConnection() as HttpURLConnection
+        var lastError: Exception? = null
+        for (url in cloudConfigUrls) {
+            try {
+                return fetchCloudRawFrom(url)
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError ?: RuntimeException("cloud fetch: no sources")
+    }
+
+    private fun fetchCloudRawFrom(url: String): String {
+        val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 15000
         conn.readTimeout = 15000
         conn.requestMethod = "GET"
         conn.setRequestProperty("Accept", "*/*")
-
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val body = stream.readBytes().toString(StandardCharsets.UTF_8)
-        if (code != HttpURLConnection.HTTP_OK) {
-            throw RuntimeException("cloud fetch: HTTP $code $body")
+        try {
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.use { it.readBytes().toString(StandardCharsets.UTF_8) } ?: throw RuntimeException("cloud fetch: empty response")
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw RuntimeException("cloud fetch: HTTP $code $body")
+            }
+            return body
+        } finally {
+            conn.disconnect()
         }
-        return body
     }
 
     private fun parseCloudLines(raw: String): List<String> {

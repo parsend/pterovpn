@@ -48,25 +48,47 @@ func TestResolveQUICDialAddr(t *testing.T) {
 	}
 }
 
-func TestPickQUICForTunTCPFlow(t *testing.T) {
-	ip := net.ParseIP("10.0.0.1")
-	if PickQUICForTunTCPFlow(ip, 22) {
-		t.Error("SSH must use plain TCP path in dual mode")
-	}
-	if PickQUICForTunTCPFlow(ip, 445) {
-		t.Error("SMB must use plain TCP")
-	}
-	if PickQUICForTunTCPFlow(nil, 443) {
-		t.Error("nil IP must not pick QUIC")
-	}
-	var quicish int
-	for p := uint16(60000); p < 60100; p++ {
-		if PickQUICForTunTCPFlow(ip, p) {
-			quicish++
+func TestDualPathSelectorHealthyMix(t *testing.T) {
+	s := newDualPathSelector(11)
+	n := 0
+	for i := 0; i < 2000; i++ {
+		if s.PreferQUIC() {
+			n++
 		}
 	}
-	if quicish < 55 || quicish > 85 {
-		t.Errorf("want ~70%% QUIC in high ports, got %d/100", quicish)
+	if n < 600 || n > 1900 {
+		t.Errorf("want blended mix, got %d/2000 QUIC picks", n)
+	}
+}
+
+func TestDualPathSelectorDegradedProbes(t *testing.T) {
+	s := newDualPathSelector(22)
+	s.RecordQuicOutcome(false)
+	s.RecordQuicOutcome(false)
+	n := 0
+	for i := 0; i < 100; i++ {
+		if s.PreferQUIC() {
+			n++
+		}
+	}
+	if n < 5 || n > 20 {
+		t.Errorf("want ~10%% QUIC probes in degraded, got %d/100", n)
+	}
+}
+
+func TestDualPathSelectorRecoveryClearsDegraded(t *testing.T) {
+	s := newDualPathSelector(33)
+	s.RecordQuicOutcome(false)
+	s.RecordQuicOutcome(false)
+	s.RecordQuicOutcome(true)
+	n := 0
+	for i := 0; i < 300; i++ {
+		if s.PreferQUIC() {
+			n++
+		}
+	}
+	if n < 80 {
+		t.Errorf("want restored QUIC preference, got %d/300", n)
 	}
 }
 

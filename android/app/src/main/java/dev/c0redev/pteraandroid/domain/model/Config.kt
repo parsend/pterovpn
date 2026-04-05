@@ -149,12 +149,38 @@ data class Config(
         fun parseConnection(s: String): Pair<String, String>? {
             val raw = s.trim()
             if (raw.isEmpty()) return null
-            val idx = raw.lastIndexOf(':')
-            if (idx <= 0 || idx == raw.lastIndex) return null
-            val server = raw.substring(0, idx).trim()
-            val token = raw.substring(idx + 1).trim()
-            if (server.isEmpty() || token.isEmpty()) return null
-            return server to token
+            for (i in raw.lastIndex downTo 0) {
+                if (raw[i] != ':') continue
+                val server = raw.substring(0, i).trim()
+                val token = raw.substring(i + 1).trim()
+                if (server.isBlank() || token.isBlank()) continue
+                if (!isValidServerHostPort(server)) continue
+                return server to token
+            }
+            return null
+        }
+
+        private fun isValidServerHostPort(value: String): Boolean {
+            val trimmed = value.trim()
+            if (trimmed.isBlank()) return false
+            return try {
+                if (trimmed.startsWith("[")) {
+                    val end = trimmed.indexOf(']')
+                    if (end <= 0 || end >= trimmed.lastIndex) return false
+                    if (trimmed[end + 1] != ':') return false
+                    val port = trimmed.substring(end + 2).toIntOrNull()
+                    port != null && port in 1..65535
+                } else {
+                    val idx = trimmed.lastIndexOf(':')
+                    if (idx <= 0 || idx == trimmed.lastIndex) return false
+                    val host = trimmed.substring(0, idx)
+                    if (host.contains(':')) return false
+                    val port = trimmed.substring(idx + 1).toIntOrNull()
+                    port != null && port in 1..65535 && host.isNotBlank()
+                }
+            } catch (_: Throwable) {
+                false
+            }
         }
     }
 }

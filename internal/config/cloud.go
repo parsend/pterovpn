@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const cloudConfigURL = "https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/mew/cloud-config.txt"
+var cloudConfigURLs = []string{
+	"https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/mew/cloud-config.txt",
+	"https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/main/cloud-config.txt",
+	"https://raw.githubusercontent.com/unitdevgcc/pterovpn/refs/heads/master/cloud-config.txt",
+}
 const cloudConfigFile = "cloud-config.txt"
 
 const CloudDefaultQUICPort = "4433"
@@ -57,8 +61,23 @@ func FetchCloud() ([]string, error) {
 }
 
 func fetchCloudRaw() (string, error) {
+	var lastErr error
+	for _, u := range cloudConfigURLs {
+		raw, err := fetchCloudRawFrom(u)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		return "", fmt.Errorf("fetch: no cloud sources configured")
+	}
+	return "", lastErr
+}
+
+func fetchCloudRawFrom(url string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(cloudConfigURL)
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)
 	}

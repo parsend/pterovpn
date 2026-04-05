@@ -49,7 +49,7 @@ func watchdogOnce(h *handler, pingTO, httpTO time.Duration) bool {
 		return false
 	}
 	dst := net.IPv4(1, 1, 1, 1)
-	c, _, err := tunnel.DialTunFlow(
+	c, _, _, err := tunnel.DialTunFlow(
 		h.opt.ServerAddrs,
 		dst,
 		80,
@@ -63,6 +63,7 @@ func watchdogOnce(h *handler, pingTO, httpTO time.Duration) bool {
 		h.opt.QuicTLSRoots,
 		h.udpMux.SharedQUICConn(),
 		h.opt.DualTransport,
+		h.dualSel,
 	)
 	if err != nil {
 		clientlog.Warn("vpn: watchdog: tun path to 1.1.1.1:80: %v", err)

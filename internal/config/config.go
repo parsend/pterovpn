@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,16 +273,37 @@ func ParseConnection(s string) (server, token string, ok bool) {
 	if s == "" {
 		return "", "", false
 	}
-	i := strings.LastIndex(s, ":")
-	if i < 0 || i == len(s)-1 {
-		return "", "", false
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] != ':' {
+			continue
+		}
+		serverCandidate := strings.TrimSpace(s[:i])
+		tokenCandidate := strings.TrimSpace(s[i+1:])
+		if serverCandidate == "" || tokenCandidate == "" {
+			continue
+		}
+		if isValidServerAddress(serverCandidate) {
+			return serverCandidate, tokenCandidate, true
+		}
 	}
-	server = strings.TrimSpace(s[:i])
-	token = strings.TrimSpace(s[i+1:])
-	if server == "" || token == "" {
-		return "", "", false
+	return "", "", false
+}
+
+func isValidServerAddress(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
 	}
-	return server, token, true
+	if strings.HasPrefix(raw, "[") {
+		closeIdx := strings.Index(raw, "]")
+		if closeIdx <= 0 || closeIdx >= len(raw)-1 || raw[closeIdx+1] != ':' {
+			return false
+		}
+		host, port, err := net.SplitHostPort(raw)
+		return err == nil && host != "" && port != ""
+	}
+	_, _, err := net.SplitHostPort(raw)
+	return err == nil
 }
 
 func SanitizeName(s string) string {

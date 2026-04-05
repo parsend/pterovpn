@@ -64,8 +64,8 @@ func Run(ctx context.Context, opt Options) error {
 	clientlog.Info("vpn: starting, servers=%v", opt.ServerAddrs)
 	clientlog.OK("vpn: pteravpn link %s | %s",
 		tunnel.PteravpnTunnelTag(opt.Transport, opt.QuicServer), pteravpnTunnelCfg(opt.Transport, opt.QuicServer))
-	if opt.DualTransport {
-		clientlog.Info("vpn: dual tun-tcp — ~70%% новых TCP через QUIC; SMB/RDP/WinRM/VNC всегда TCP; при ошибке QUIC — fallback TCP; QUIC idle 15m keepalive 8s")
+	if opt.DualTransport && tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
+		clientlog.Info("vpn: dual transport blend QUIC/TCP по метрикам пути; при провале QUIC сдвиг в TCP-first и пробное восстановление QUIC")
 	}
 	if tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
 		if ep, derived, err := tunnel.ResolveQUICDialAddr(opt.ServerAddrs, opt.QuicServer); err == nil {
@@ -104,9 +104,14 @@ func Run(ctx context.Context, opt Options) error {
 		defer dev.Close()
 	}
 
+	var dualSel *tunnel.DualPathSelector
+	if opt.DualTransport && tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
+		dualSel = tunnel.NewDualPathSelector()
+	}
 	h := &handler{
-		opt:    opt,
-		udpMux: udpMux,
+		opt:     opt,
+		udpMux:  udpMux,
+		dualSel: dualSel,
 	}
 
 	st, err := core.CreateStack(&core.Config{
@@ -318,8 +323,9 @@ func (c *udpChan) readLoop() {
 }
 
 type handler struct {
-	opt    Options
-	udpMux *udpMux
+	opt     Options
+	udpMux  *udpMux
+	dualSel *tunnel.DualPathSelector
 }
 
 func (h *handler) HandleTCP(c adapter.TCPConn) {
@@ -377,17 +383,9 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	}
 
 	shared := h.udpMux.SharedQUICConn()
-	tunPreferTCP := false
-	if h.opt.DualTransport && shared != nil && tunnel.UsesQUICTransport(h.opt.Transport, h.opt.QuicServer) {
-		tunPreferTCP = !tunnel.PickQUICForTunTCPFlow(dstIP, dstPort)
-	}
 	tag := tunnel.PteravpnTunnelTag(h.opt.Transport, h.opt.QuicServer)
 	if h.opt.DualTransport && shared != nil {
-		if tunPreferTCP {
-			tag = "TCP"
-		} else {
-			tag = "QUIC"
-		}
+		tag = "QUIC"
 	}
 	clientlog.Traffic("vpn: tun-tcp %s:%d  [%s]  %s", dstIP.String(), dstPort, tag, pteravpnTunnelCfg(h.opt.Transport, h.opt.QuicServer))
 
@@ -395,9 +393,15 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	var r *bufio.Reader
 	slot := protocol.TimeSlot()
 	var err error
-	var fellBackTCP bool
-	sconn, fellBackTCP, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport)
-	if fellBackTCP {
+	var fellBackTCP, tcpOnly bool
+	sconn, fellBackTCP, tcpOnly, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport, h.dualSel)
+	if h.opt.DualTransport && shared != nil {
+		if fellBackTCP || tcpOnly {
+			tag = "TCP"
+		} else {
+			tag = "QUIC"
+		}
+	} else if fellBackTCP {
 		tag = "TCP"
 	}
 	if err != nil {
