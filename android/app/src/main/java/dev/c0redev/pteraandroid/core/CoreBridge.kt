@@ -24,6 +24,7 @@ object CoreBridge {
         val leafPin: String,
         val error: String?,
         val capsNoQuic: Boolean? = null,
+        val activePeers: Int? = null,
     )
 
     data class PingResult(
@@ -95,6 +96,7 @@ object CoreBridge {
         val raw = Core.probePterovpn(server, token, timeoutMs)
         val j = JSONObject(raw)
         val capsNoQuic = if (j.has("capsNoQuic")) j.optBoolean("capsNoQuic") else null
+        val activePeers = if (j.has("activePeers")) j.optInt("activePeers") else null
         val res = ProbeResult(
             ok = j.optBoolean("ok", false),
             ipv6 = j.optBoolean("ipv6", false),
@@ -102,8 +104,9 @@ object CoreBridge {
             leafPin = j.optString("leafPin", ""),
             error = nullableErr(j, "error"),
             capsNoQuic = capsNoQuic,
+            activePeers = activePeers,
         )
-        PteraLog.i("probePterovpn -> ok=${res.ok} mode=${res.mode} capsNoQuic=$capsNoQuic err=${res.error ?: "null"}")
+        PteraLog.i("probePterovpn -> ok=${res.ok} mode=${res.mode} peers=$activePeers capsNoQuic=$capsNoQuic err=${res.error ?: "null"}")
         return res
     }
 

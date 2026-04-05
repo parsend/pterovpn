@@ -63,12 +63,13 @@ type Opts struct {
 }
 
 type item struct {
-	cfg         config.Config
-	name        string
-	pingMs      int64
-	pterovpn    int
-	ipv6Support bool
-	serverMode  string
+	cfg          config.Config
+	name         string
+	pingMs       int64
+	pterovpn     int
+	ipv6Support  bool
+	serverMode   string
+	activePeers  int
 }
 
 func (i item) Title() string {
@@ -113,7 +114,11 @@ func (i item) Description() string {
 	if i.serverMode != "" {
 		mode = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(i.serverMode)
 	}
-	return fmt.Sprintf("[%s] [%s]%s%s %s", ping, ptr, ipv6, mode, i.cfg.Server)
+	users := ""
+	if i.activePeers >= 0 {
+		users = " " + lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(fmt.Sprintf("·%d online", i.activePeers))
+	}
+	return fmt.Sprintf("[%s] [%s]%s%s%s %s", ping, ptr, ipv6, mode, users, i.cfg.Server)
 }
 func (i item) FilterValue() string { return i.name + " " + i.cfg.Server }
 
@@ -132,6 +137,7 @@ type Model struct {
 	pterovpnRes   map[string]int
 	cfgIPv6       map[string]bool
 	cfgMode       map[string]string
+	cfgPeers      map[string]int
 	logBuf        *bytes.Buffer
 	logs          []string
 	logsMu        sync.Mutex
@@ -239,6 +245,7 @@ func NewModel(opts Opts) *Model {
 		pterovpnRes:        make(map[string]int),
 		cfgIPv6:            make(map[string]bool),
 		cfgMode:            make(map[string]string),
+		cfgPeers:           make(map[string]int),
 		logViewport:        viewport.New(60, 14),
 		logAutoScroll:      true,
 		protectionViewport: viewport.New(60, 14),
@@ -271,7 +278,13 @@ func (m *Model) buildItems() []list.Item {
 		if m.cfgMode != nil {
 			mode = m.cfgMode[m.names[i]]
 		}
-		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6, serverMode: mode}
+		ap := -1
+		if m.cfgPeers != nil {
+			if v, ok := m.cfgPeers[m.names[i]]; ok {
+				ap = v
+			}
+		}
+		items[i] = item{cfg: m.cfgs[i], name: m.names[i], pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6, serverMode: mode, activePeers: ap}
 	}
 	return items
 }
@@ -341,7 +354,13 @@ func (m *Model) buildCloudItems() []list.Item {
 		if m.cloudMode != nil {
 			mode = m.cloudMode[m.cloudNames[i]]
 		}
-		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6Support, serverMode: mode}
+		ap := -1
+		if m.cfgPeers != nil {
+			if v, ok := m.cfgPeers[m.cloudNames[i]]; ok {
+				ap = v
+			}
+		}
+		items[i] = item{cfg: m.cloudCfgs[i], name: name, pingMs: pingMs, pterovpn: pterovpn, ipv6Support: ipv6Support, serverMode: mode, activePeers: ap}
 	}
 	return items
 }
@@ -630,11 +649,12 @@ type pingResultMsg struct {
 	failed bool
 }
 type pterovpnResultMsg struct {
-	name string
-	ok   bool
-	err  bool
-	ipv6 bool
-	mode string
+	name        string
+	ok          bool
+	err         bool
+	ipv6        bool
+	mode        string
+	activePeers uint32
 }
 
 type cloudFetchedMsg struct {
@@ -734,7 +754,11 @@ func runProbePterovpn(addr, wireToken, name string) tea.Cmd {
 		if err != nil {
 			return pterovpnResultMsg{name: name, ok: false, err: true, ipv6: false, mode: ""}
 		}
-		return pterovpnResultMsg{name: name, ok: ok, err: false, ipv6: ipv6, mode: probe.ServerModeFromCaps(caps)}
+		var ap uint32
+		if caps != nil {
+			ap = caps.ActivePeers
+		}
+		return pterovpnResultMsg{name: name, ok: ok, err: false, ipv6: ipv6, mode: probe.ServerModeFromCaps(caps), activePeers: ap}
 	}
 }
 
@@ -1296,6 +1320,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pterovpnRes[msg.name] = 1
 		} else {
 			m.pterovpnRes[msg.name] = 0
+		}
+		if m.cfgPeers == nil {
+			m.cfgPeers = make(map[string]int)
+		}
+		if !msg.err && msg.ok {
+			m.cfgPeers[msg.name] = int(msg.activePeers)
 		}
 		if m.cfgIPv6 == nil {
 			m.cfgIPv6 = make(map[string]bool)

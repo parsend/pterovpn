@@ -40,12 +40,13 @@ type stateResult struct {
 }
 
 type probeResult struct {
-	OK         bool   `json:"ok"`
-	IPv6       bool   `json:"ipv6"`
-	Mode       string `json:"mode"`
-	LeafPin    string `json:"leafPin"`
-	Error      string `json:"error,omitempty"`
-	CapsNoQuic *bool  `json:"capsNoQuic,omitempty"`
+	OK          bool   `json:"ok"`
+	IPv6        bool   `json:"ipv6"`
+	Mode        string `json:"mode"`
+	LeafPin     string `json:"leafPin"`
+	Error       string `json:"error,omitempty"`
+	CapsNoQuic  *bool  `json:"capsNoQuic,omitempty"`
+	ActivePeers uint32 `json:"activePeers,omitempty"`
 }
 
 type pingResult struct {
@@ -284,6 +285,10 @@ func StartTun(tunFd int, mtu int, cfgJSON string, configDir string) string {
 		QuicTLSRoots:      quicRoots,
 		QuicTraceLog:      cfg.QuicTraceLog,
 		DualTransport:     dual,
+		WatchdogInterval:  time.Minute,
+		OnWatchdogFail: func() {
+			setErr(s, "watchdog")
+		},
 		Ready: func() {
 			s.ready.Store(true)
 		},
@@ -468,6 +473,7 @@ func ProbePterovpn(server string, token string, timeoutMs int) string {
 	if caps != nil {
 		noQuic := (caps.TransportMask & protocol.TransportQUIC) == 0
 		res.CapsNoQuic = &noQuic
+		res.ActivePeers = caps.ActivePeers
 	}
 	return jsonString(res)
 }

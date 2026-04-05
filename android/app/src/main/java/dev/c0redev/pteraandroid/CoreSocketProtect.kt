@@ -14,7 +14,7 @@ object CoreSocketProtect {
             try {
                 Class.forName("core.Protector")
             } catch (_: ClassNotFoundException) {
-                PteraLog.w("ptera-core без Protector — пересобери AAR (gomobile bind ./android/core), иначе TCP к серверу может уходить в TUN")
+                PteraLog.w("ptera-core без Protector — arr нен тот")
                 return
             }
         }

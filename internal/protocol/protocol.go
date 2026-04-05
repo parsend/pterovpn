@@ -22,6 +22,7 @@ const HelloCapsHeaderLen = 11
 const HelloCapsMaxNonceLen = 32
 
 const helloCapsExtQuicLeafPin byte = 1
+const helloCapsExtActivePeers byte = 2
 
 const maxPrefixLen = 64
 
@@ -55,6 +56,8 @@ type ServerHelloCaps struct {
 	ObfsProfileID byte
 	Nonce         []byte
 	QuicLeafPinSHA256 []byte
+	
+	ActivePeers uint32
 }
 
 type Handshake struct {
@@ -232,6 +235,10 @@ func WriteServerHelloCaps(w io.Writer, caps ServerHelloCaps) error {
 		payload = append(payload, helloCapsExtQuicLeafPin)
 		payload = append(payload, caps.QuicLeafPinSHA256...)
 	}
+	payload = append(payload, helloCapsExtActivePeers)
+	var peer [4]byte
+	binary.BigEndian.PutUint32(peer[:], caps.ActivePeers)
+	payload = append(payload, peer[:]...)
 	_, err := w.Write(payload)
 	return err
 }
@@ -261,26 +268,38 @@ func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
 		ObfsProfileID: buf[9],
 		Nonce:         nonce,
 	}
-	tag := make([]byte, 1)
-	n, err := r.Read(tag)
-	if n == 0 {
-		if err == io.EOF {
+	for {
+		tag := make([]byte, 1)
+		n, err := r.Read(tag)
+		if n == 0 {
+			if err == io.EOF {
+				return caps, nil
+			}
+			if err != nil {
+				return caps, err
+			}
 			return caps, nil
 		}
 		if err != nil {
 			return caps, err
 		}
-		return caps, nil
+		switch tag[0] {
+		case helloCapsExtQuicLeafPin:
+			pin := make([]byte, 32)
+			if _, err := io.ReadFull(r, pin); err != nil {
+				return ServerHelloCaps{}, err
+			}
+			caps.QuicLeafPinSHA256 = pin
+		case helloCapsExtActivePeers:
+			var peer [4]byte
+			if _, err := io.ReadFull(r, peer[:]); err != nil {
+				return ServerHelloCaps{}, err
+			}
+			caps.ActivePeers = binary.BigEndian.Uint32(peer[:])
+		default:
+			return ServerHelloCaps{}, fmt.Errorf("caps unknown extension tag %02x", tag[0])
+		}
 	}
-	if tag[0] != helloCapsExtQuicLeafPin {
-		return ServerHelloCaps{}, fmt.Errorf("caps unknown extension tag %02x", tag[0])
-	}
-	pin := make([]byte, 32)
-	if _, err := io.ReadFull(r, pin); err != nil {
-		return ServerHelloCaps{}, err
-	}
-	caps.QuicLeafPinSHA256 = pin
-	return caps, nil
 }
 
 func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {

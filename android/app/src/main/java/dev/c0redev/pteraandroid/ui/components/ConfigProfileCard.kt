@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -190,6 +191,32 @@ fun ConfigProfileCard(
                             fontWeight = FontWeight.SemiBold,
                             color = pingLabelColor(item.pingMs, item.pingFailed, scheme),
                         )
+                    }
+                }
+                val peers = item.activePeers
+                if (peers != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = scheme.secondaryContainer.copy(alpha = 0.55f),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.People,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = scheme.onSecondaryContainer,
+                            )
+                            Text(
+                                text = stringResource(R.string.config_card_active_peers, peers),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = scheme.onSecondaryContainer,
+                            )
+                        }
                     }
                 }
                 AssistChipCompat(

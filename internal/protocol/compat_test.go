@@ -68,6 +68,9 @@ func TestServerHelloCapsRoundtrip(t *testing.T) {
 	if got.Version != caps.Version || got.TransportMask != caps.TransportMask || got.QuicPort != caps.QuicPort || got.TCPPortHint != caps.TCPPortHint {
 		t.Fatalf("caps mismatch got=%+v want=%+v", got, caps)
 	}
+	if got.ActivePeers != 0 {
+		t.Fatalf("activePeers want 0 got %d", got.ActivePeers)
+	}
 }
 
 func TestServerHelloCapsQuicPinRoundtrip(t *testing.T) {

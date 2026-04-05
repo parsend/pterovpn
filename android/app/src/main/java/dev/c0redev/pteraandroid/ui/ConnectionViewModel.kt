@@ -61,6 +61,7 @@ data class ConfigItemState(
     val ipv6Support: Boolean = false,
     val serverMode: String = "",
     val geo: ServerGeo? = null,
+    val activePeers: Int? = null,
 )
 
 data class ConnectionState(
@@ -89,6 +90,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingMetric: MetricDraft? = null
     private var activeMetric: MetricDraft? = null
     private val metricFinalized = AtomicBoolean(false)
+    private val watchdogReconnectBusy = AtomicBoolean(false)
 
     private val _localConfigs = MutableStateFlow<List<ConfigItemState>>(emptyList())
     val localConfigs = _localConfigs
@@ -230,6 +232,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                             ipv6Support = probe.ipv6,
                             serverMode = probe.mode,
                             geo = geo,
+                            activePeers = probe.activePeers,
                         )
                     }
                 }.awaitAll()
@@ -259,6 +262,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                                 ipv6Support = probe.ipv6,
                                 serverMode = probe.mode,
                                 geo = geo,
+                                activePeers = probe.activePeers,
                             )
                         }
                     }.awaitAll()
@@ -567,6 +571,23 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         startService(fallbackCfg.toJson().toString(), settings.toJson().toString())
     }
 
+    private fun scheduleWatchdogReconnect() {
+        val name = activeConfigName ?: return
+        val cfg = activeConfig ?: return
+        if (!watchdogReconnectBusy.compareAndSet(false, true)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                PteraLog.w("watchdog reconnect profile=$name")
+                delay(400)
+                disconnect()
+                delay(500)
+                connect(name, cfg)
+            } finally {
+                watchdogReconnectBusy.set(false)
+            }
+        }
+    }
+
     private fun startLogPolling(handle: Long, mode: String?) {
         pollJob?.cancel()
         val gen = ++pollGeneration
@@ -580,6 +601,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 val visibleError = if (noSession) null else state.error
                 if (gen == pollGeneration) {
                     _connection.value = ConnectionState(connected = state.running, ready = state.ready, mode = mode, error = visibleError)
+                }
+                if (gen == pollGeneration && visibleError?.equals("watchdog", ignoreCase = true) == true) {
+                    scheduleWatchdogReconnect()
                 }
                 val cfg = activeConfig
                 val startedAt = activeStartedAt
@@ -602,6 +626,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 if (!state.running) {
+                    if (gen == pollGeneration && state.error?.equals("watchdog", ignoreCase = true) == true) {
+                        scheduleWatchdogReconnect()
+                    }
                     if (noSession) {
                         if (gen == pollGeneration) {
                             coreHandle = -1

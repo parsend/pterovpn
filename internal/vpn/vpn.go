@@ -46,12 +46,20 @@ type Options struct {
 	QuicTLSRoots      *x509.CertPool
 	QuicTraceLog      bool
 	DualTransport     bool
+	WatchdogInterval time.Duration
+	OnWatchdogFail   func()
 }
 
 func Run(ctx context.Context, opt Options) error {
 	if len(opt.ServerAddrs) == 0 {
 		return errors.New("server addrs empty")
 	}
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+	go func() {
+		<-ctx.Done()
+		stopRun()
+	}()
 	tunnel.SetQUICTrace(opt.QuicTraceLog)
 	if opt.QuicTraceLog {
 		clientlog.Info("vpn: quicTraceLog=true — строки TRACE в логе QUIC dial")
@@ -120,8 +128,14 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.Ready != nil {
 		opt.Ready()
 	}
-	<-ctx.Done()
+	if opt.WatchdogInterval > 0 {
+		go runWatchdog(runCtx, stopRun, h, opt)
+	}
+	<-runCtx.Done()
 	clientlog.Info("vpn: stopping")
+	if h.watchdogTriggered {
+		return errors.New("watchdog")
+	}
 	return nil
 }
 
@@ -310,8 +324,9 @@ func (c *udpChan) readLoop() {
 }
 
 type handler struct {
-	opt    Options
-	udpMux *udpMux
+	opt               Options
+	udpMux            *udpMux
+	watchdogTriggered bool
 }
 
 func (h *handler) HandleTCP(c adapter.TCPConn) {

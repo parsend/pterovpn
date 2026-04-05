@@ -137,6 +137,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			QuicTLSRoots:      opts.quicTLSRoots,
 			QuicTraceLog:      opts.quicTraceLog,
 			DualTransport:     opts.dualTransport,
+			WatchdogInterval:  time.Minute,
 			Ready:             func() { close(ready) },
 			Protection:        opts.protection,
 		})

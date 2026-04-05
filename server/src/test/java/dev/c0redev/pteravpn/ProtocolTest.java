@@ -164,7 +164,8 @@ class ProtocolTest {
         8443,
         2,
         new byte[]{9, 8, 7},
-        null);
+        null,
+        0);
     var out = new ByteArrayOutputStream();
     Protocol.writeServerHelloCaps(out, caps);
     var got = Protocol.readServerHelloCaps(new ByteArrayInputStream(out.toByteArray()));
@@ -175,6 +176,7 @@ class ProtocolTest {
     assertEquals(caps.tcpPortHint(), got.tcpPortHint());
     assertArrayEquals(caps.nonce(), got.nonce());
     assertNull(got.quicLeafPinSha256());
+    assertEquals(0, got.activePeers());
   }
 
   @Test
@@ -190,10 +192,12 @@ class ProtocolTest {
         0,
         0,
         new byte[]{1},
-        pin);
+        pin,
+        3);
     var out = new ByteArrayOutputStream();
     Protocol.writeServerHelloCaps(out, caps);
     var got = Protocol.readServerHelloCaps(new ByteArrayInputStream(out.toByteArray()));
     assertArrayEquals(pin, got.quicLeafPinSha256());
+    assertEquals(3, got.activePeers());
   }
 }

@@ -291,7 +291,8 @@ final class QuicServer implements AutoCloseable {
               Protocol.writeServerHelloCaps(out, new Protocol.ServerHelloCaps(
                   Protocol.CAPS_VERSION, legacyIpv6, transportMask, featureBits,
                   cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, 0, new byte[0],
-                  QuicServer.getAdvertisedQuicLeafPin()));
+                  QuicServer.getAdvertisedQuicLeafPin(),
+                  ActivePeerRegistry.countDistinct()));
               return;
             }
             if (hs.role() == Protocol.ROLE_UDP) {
@@ -302,7 +303,17 @@ final class QuicServer implements AutoCloseable {
               handshakes.decrementAndGet();
               released = true;
             }
-            var session = new SessionHandler(cfg, udp, String.valueOf(stream.remoteAddress()), stream::close);
+            String peerKey = ActivePeerRegistry.hostKey(stream.remoteAddress());
+            boolean countPeer = hs.role() == Protocol.ROLE_UDP;
+            if (countPeer) {
+              ActivePeerRegistry.join(peerKey);
+            }
+            var session = new SessionHandler(cfg, udp, String.valueOf(stream.remoteAddress()), () -> {
+              if (countPeer) {
+                ActivePeerRegistry.leave(peerKey);
+              }
+              stream.close();
+            });
             session.handle(
                 hs,
                 hr,

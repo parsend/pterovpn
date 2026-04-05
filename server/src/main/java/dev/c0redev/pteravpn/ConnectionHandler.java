@@ -65,7 +65,15 @@ final class ConnectionHandler implements Runnable {
             }
             OutputStream out = xor.wrapOutput(rawOut);
             s.setSoTimeout(0);
+            String peerKey = ActivePeerRegistry.hostKey(s.getRemoteSocketAddress());
+            boolean countPeer = hs.role() == Protocol.ROLE_UDP;
+            if (countPeer) {
+                ActivePeerRegistry.join(peerKey);
+            }
             var session = new SessionHandler(cfg, udp, String.valueOf(s.getRemoteSocketAddress()), () -> {
+                if (countPeer) {
+                    ActivePeerRegistry.leave(peerKey);
+                }
                 try {
                     s.close();
                 } catch (IOException ignored) {}
@@ -110,7 +118,8 @@ final class ConnectionHandler implements Runnable {
                 tcpPortHint,
                 0,
                 nonce,
-                QuicServer.getAdvertisedQuicLeafPin()
+                QuicServer.getAdvertisedQuicLeafPin(),
+                ActivePeerRegistry.countDistinct()
             ));
         } catch (Throwable ignored) {}
     }

@@ -195,6 +195,7 @@ final class Protocol {
   }
 
   static final int HELLO_CAPS_EXT_QUIC_LEAF_PIN = 1;
+  static final int HELLO_CAPS_EXT_ACTIVE_PEERS = 2;
 
   static void writeServerHelloCaps(OutputStream out, ServerHelloCaps caps) throws IOException {
     out.write(caps.version() & 0xff);
@@ -213,6 +214,8 @@ final class Protocol {
       out.write(HELLO_CAPS_EXT_QUIC_LEAF_PIN);
       out.write(qp);
     }
+    out.write(HELLO_CAPS_EXT_ACTIVE_PEERS);
+    writeU32(out, Math.max(0, caps.activePeers()));
     out.flush();
   }
 
@@ -228,12 +231,19 @@ final class Protocol {
     if (nonceLen > MAX_HELLO_CAPS_NONCE) throw new IOException("caps nonce too long");
     byte[] nonce = nonceLen == 0 ? new byte[0] : readN(in, nonceLen);
     byte[] qpin = null;
-    int ext = in.read();
-    if (ext >= 0) {
-      if (ext != HELLO_CAPS_EXT_QUIC_LEAF_PIN) {
+    int activePeers = 0;
+    while (true) {
+      int ext = in.read();
+      if (ext < 0) {
+        break;
+      }
+      if (ext == HELLO_CAPS_EXT_QUIC_LEAF_PIN) {
+        qpin = readN(in, 32);
+      } else if (ext == HELLO_CAPS_EXT_ACTIVE_PEERS) {
+        activePeers = readU32(in);
+      } else {
         throw new IOException("bad caps extension tag: " + ext);
       }
-      qpin = readN(in, 32);
     }
     return new ServerHelloCaps(
         version,
@@ -244,7 +254,8 @@ final class Protocol {
         tcpPortHint,
         obfsProfileId,
         nonce,
-        qpin);
+        qpin,
+        activePeers);
   }
 
   record Handshake(byte role, int channelId, String token) {}
@@ -259,7 +270,8 @@ final class Protocol {
       int tcpPortHint,
       int obfsProfileId,
       byte[] nonce,
-      byte[] quicLeafPinSha256) {}
+      byte[] quicLeafPinSha256,
+      int activePeers) {}
 
   record ClientOptions(int padS4) {
     static Optional<ClientOptions> parse(String json) {
