@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Update
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -44,6 +45,7 @@ import dev.c0redev.pteraandroid.R
 import dev.c0redev.pteraandroid.domain.model.ClientSettings
 import dev.c0redev.pteraandroid.quick.QuickConnectPrefs
 import dev.c0redev.pteraandroid.ui.ConnectionViewModel
+import dev.c0redev.pteraandroid.ui.UpdateUiState
 import dev.c0redev.pteraandroid.ui.components.SectionCard
 import dev.c0redev.pteraandroid.ui.components.StyledTextField
 
@@ -52,6 +54,7 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val localNames = vm.localConfigs.collectAsState().value.map { it.name }
     val s = vm.clientSettings.collectAsState().value
     val upd by vm.updateStatus.collectAsState()
+    val updateUi by vm.updateUi.collectAsState()
     val remoteTag by vm.remoteReleaseTag.collectAsState()
 
     LaunchedEffect(Unit) {
@@ -312,6 +315,7 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
 
                 Button(
                     onClick = { vm.checkForUpdateAndInstall() },
+                    enabled = updateUi is UpdateUiState.Idle,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                 ) {
@@ -321,6 +325,34 @@ fun SettingsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                         modifier = Modifier.size(18.dp),
                     )
                     Text("Проверить обновления", modifier = Modifier.padding(start = 8.dp))
+                }
+
+                when (val u = updateUi) {
+                    is UpdateUiState.Checking -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            stringResource(R.string.update_checking),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    is UpdateUiState.Downloading -> {
+                        val p = u.progress
+                        if (p != null) {
+                            LinearProgressIndicator(
+                                progress = { p.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        Text(
+                            stringResource(R.string.update_downloading),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    else -> {}
                 }
 
                 if (!upd.isNullOrBlank()) {

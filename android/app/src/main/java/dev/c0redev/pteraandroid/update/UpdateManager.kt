@@ -43,7 +43,11 @@ class UpdateManager {
         return compareVersion(a, b) > 0
     }
 
-    fun checkAndInstall(context: Context, currentVersion: String): Boolean {
+    fun checkAndInstall(
+        context: Context,
+        currentVersion: String,
+        onDownloadProgress: (Float) -> Unit = {},
+    ): Boolean {
         val candidate = checkLatestRelease() ?: return false
         UpdatePrefs.setRemoteReleaseTag(context, candidate.tag)
         if (!isNewer(candidate.tag, currentVersion)) return false
@@ -51,7 +55,7 @@ class UpdateManager {
         val dir = File(context.filesDir, "updates").apply { mkdirs() }
         val outFile = File(dir, "install.apk")
         val partFile = File(dir, "install.apk.part")
-        downloadApkToFile(candidate.apkUrl, partFile, outFile)
+        downloadApkToFile(candidate.apkUrl, partFile, outFile, onDownloadProgress)
 
         val authority = "${context.packageName}.fileprovider"
         val uri = FileProvider.getUriForFile(context, authority, outFile)
@@ -117,7 +121,12 @@ class UpdateManager {
         return 0
     }
 
-    private fun downloadApkToFile(url: String, partFile: File, outFile: File) {
+    private fun downloadApkToFile(
+        url: String,
+        partFile: File,
+        outFile: File,
+        onDownloadProgress: (Float) -> Unit,
+    ) {
         partFile.delete()
         outFile.delete()
         partFile.parentFile?.mkdirs()
@@ -129,15 +138,34 @@ class UpdateManager {
         conn.setRequestProperty("Accept", "application/octet-stream, application/vnd.android.package-archive, */*")
 
         if (conn.responseCode !in 200..299) {
+            conn.disconnect()
             throw IllegalStateException("download failed http=${conn.responseCode}")
         }
 
-        conn.inputStream.use { input ->
-            partFile.outputStream().use { output ->
-                input.copyTo(output)
+        val total = conn.contentLengthLong
+        try {
+            conn.inputStream.use { input ->
+                partFile.outputStream().use { output ->
+                    if (total > 0L) {
+                        onDownloadProgress(0f)
+                        var read = 0L
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            output.write(buf, 0, n)
+                            read += n
+                            onDownloadProgress((read.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+                        }
+                    } else {
+                        onDownloadProgress(-1f)
+                        input.copyTo(output)
+                    }
+                }
             }
+        } finally {
+            conn.disconnect()
         }
-        conn.disconnect()
 
         if (!looksLikeApkZip(partFile)) {
             partFile.delete()

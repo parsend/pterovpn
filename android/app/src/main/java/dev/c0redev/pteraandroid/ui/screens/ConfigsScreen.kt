@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -56,6 +58,9 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val localItems = vm.localConfigs.collectAsState().value
     val cloudItems = vm.cloudConfigs.collectAsState().value
     val cloudLoading = vm.cloudLoading.collectAsState().value
+    val localRefreshing = vm.localRefreshing.collectAsState().value
+    val localInitialLoad = vm.localConfigsInitialLoad.collectAsState().value
+    val localShowWait = (localInitialLoad || localRefreshing) && localItems.isEmpty()
     val cloudProgress = vm.cloudRefreshProgress.collectAsState().value
     val connectingName = vm.connectingProfileName.collectAsState().value
     val conn = vm.connection.collectAsState().value
@@ -66,6 +71,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     var editorOldName by remember { mutableStateOf<String?>(null) }
     var editorCfg by remember { mutableStateOf<Config?>(null) }
     var importTarget by remember { mutableStateOf<ConfigItemState?>(null) }
+    var deleteConfirmName by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -127,7 +133,40 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(PteraSpacing.sectionGap),
             ) {
-                if (localItems.isEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { vm.refreshLocalConfigs() },
+                            enabled = !localRefreshing,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(R.string.configs_local_refresh))
+                        }
+                        if (localRefreshing) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text(
+                                stringResource(R.string.configs_local_refreshing),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (localShowWait) {
+                    item {
+                        Text(
+                            stringResource(R.string.configs_local_wait),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    items(3, key = { "local_skel_$it" }) {
+                        LocalProfileSkeleton()
+                    }
+                }
+                if (localItems.isEmpty() && !localShowWait) {
                     item {
                         Text(
                             text = stringResource(R.string.configs_empty_local),
@@ -151,7 +190,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                             editorCfg = it.config
                             editorOpen = true
                         },
-                        onDelete = { vm.deleteLocalConfig(it.name) },
+                        onDelete = { deleteConfirmName = it.name },
                     )
                 }
             }
@@ -228,6 +267,30 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                 }
             }
         }
+    }
+
+    val deleteName = deleteConfirmName
+    if (deleteName != null) {
+        AlertDialog(
+            onDismissRequest = { deleteConfirmName = null },
+            title = { Text(stringResource(R.string.configs_delete_title)) },
+            text = { Text(stringResource(R.string.configs_delete_message, deleteName)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.deleteLocalConfig(deleteName)
+                        deleteConfirmName = null
+                    },
+                ) {
+                    Text(stringResource(R.string.configs_delete_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteConfirmName = null }) {
+                    Text(stringResource(R.string.configs_import_cancel))
+                }
+            },
+        )
     }
 
     val importTargetVal = importTarget
@@ -580,5 +643,54 @@ private fun ConfigEditorDialog(
             }
         }
     )
+}
+
+@Composable
+private fun LocalProfileSkeleton() {
+    val bar = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f)
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(0.42f)
+                    .height(18.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(bar),
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth(0.62f)
+                    .height(13.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(bar),
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(bar),
+                )
+                Box(
+                    Modifier
+                        .width(52.dp)
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(bar),
+                )
+            }
+        }
+    }
 }
 

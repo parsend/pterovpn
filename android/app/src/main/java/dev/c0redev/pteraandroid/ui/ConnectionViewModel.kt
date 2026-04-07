@@ -54,6 +54,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 
+sealed class UpdateUiState {
+    object Idle : UpdateUiState()
+    object Checking : UpdateUiState()
+    data class Downloading(val progress: Float?) : UpdateUiState()
+}
+
 private const val PROBE_TIMEOUT_MS = 12_000L
 private const val PING_TIMEOUT_MS = 10_000L
 private const val PROBE_RETRY_DELAY_MS = 450L
@@ -119,11 +125,19 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private val updateManager = UpdateManager()
     private val _updateStatus = MutableStateFlow<String?>(null)
     val updateStatus = _updateStatus
+    private val _updateUi = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val updateUi = _updateUi.asStateFlow()
     private val _remoteReleaseTag = MutableStateFlow<String?>(UpdatePrefs.getRemoteReleaseTag(appCtx))
     val remoteReleaseTag = _remoteReleaseTag
 
     private val _cloudLoading = MutableStateFlow(false)
     val cloudLoading = _cloudLoading.asStateFlow()
+
+    private val _localRefreshing = MutableStateFlow(false)
+    val localRefreshing = _localRefreshing.asStateFlow()
+
+    private val _localConfigsInitialLoad = MutableStateFlow(true)
+    val localConfigsInitialLoad = _localConfigsInitialLoad.asStateFlow()
 
     private val _cloudRefreshProgress = MutableStateFlow(0f)
     val cloudRefreshProgress = _cloudRefreshProgress.asStateFlow()
@@ -268,18 +282,24 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshLocalConfigs() {
         viewModelScope.launch(Dispatchers.IO) {
-            val list = localRepo.listConfigs()
-            _localConfigs.value = coroutineScope {
-                list.map { stored ->
-                    async {
-                        val ping = CoreBridge.ping(stored.config.server, PING_TIMEOUT_MS)
-                        val probe = probeWithRetry(stored.config.server, stored.config.token)
-                        val geo = withTimeoutOrNull(8000) {
-                            IpWhoLookup.lookupForServerField(stored.config.server)
+            _localRefreshing.value = true
+            try {
+                val list = localRepo.listConfigs()
+                _localConfigs.value = coroutineScope {
+                    list.map { stored ->
+                        async {
+                            val ping = CoreBridge.ping(stored.config.server, PING_TIMEOUT_MS)
+                            val probe = probeWithRetry(stored.config.server, stored.config.token)
+                            val geo = withTimeoutOrNull(8000) {
+                                IpWhoLookup.lookupForServerField(stored.config.server)
+                            }
+                            enrichConfigItem(stored.name, stored.config, ping, probe, geo)
                         }
-                        enrichConfigItem(stored.name, stored.config, ping, probe, geo)
-                    }
-                }.awaitAll()
+                    }.awaitAll()
+                }
+            } finally {
+                _localRefreshing.value = false
+                _localConfigsInitialLoad.value = false
             }
         }
     }
@@ -522,30 +542,44 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun checkForUpdateAndInstall() {
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { updateManager.checkAndInstall(appCtx, BuildConfig.VERSION_NAME) }
-                .onSuccess {
-                    _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
-                    val msg = if (it) {
-                        appCtx.getString(R.string.update_install_started)
-                    } else {
-                        appCtx.getString(R.string.update_none)
+            _updateUi.value = UpdateUiState.Checking
+            try {
+                runCatching {
+                    updateManager.checkAndInstall(appCtx, BuildConfig.VERSION_NAME) { p ->
+                        _updateUi.value = UpdateUiState.Downloading(if (p < 0f) null else p)
                     }
-                    _updateStatus.value = msg
-                    _uiMessages.tryEmit(msg)
                 }
-                .onFailure {
-                    _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
-                    val msg = appCtx.getString(R.string.update_error_fmt, it.message ?: "unknown")
-                    _updateStatus.value = msg
-                    _uiMessages.tryEmit(msg)
-                }
+                    .onSuccess {
+                        _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+                        val msg = if (it) {
+                            appCtx.getString(R.string.update_install_started)
+                        } else {
+                            appCtx.getString(R.string.update_none)
+                        }
+                        _updateStatus.value = msg
+                        _uiMessages.tryEmit(msg)
+                    }
+                    .onFailure {
+                        _remoteReleaseTag.value = UpdatePrefs.getRemoteReleaseTag(appCtx)
+                        val msg = appCtx.getString(R.string.update_error_fmt, it.message ?: "unknown")
+                        _updateStatus.value = msg
+                        _uiMessages.tryEmit(msg)
+                    }
+            } finally {
+                _updateUi.value = UpdateUiState.Idle
+            }
         }
     }
 
     fun saveClientSettings(s: ClientSettings) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveClientSettings(s); reloadProtectionAndSettings() } }
     fun saveGlobalProtection(p: dev.c0redev.pteraandroid.domain.model.ProtectionOptions?) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveProtection(p); reloadProtectionAndSettings() } }
     fun upsertLocalConfig(name: String, cfg: Config) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveConfig(name, cfg); refreshLocalConfigs() } }
-    fun deleteLocalConfig(name: String) { viewModelScope.launch(Dispatchers.IO) { localRepo.deleteConfig(name); refreshLocalConfigs() } }
+    fun deleteLocalConfig(name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localRepo.deleteConfig(name)
+            _localConfigs.value = _localConfigs.value.filter { it.name != name }
+        }
+    }
 
     fun importCloudAsLocal(desiredName: String, item: ConfigItemState) {
         viewModelScope.launch(Dispatchers.IO) {

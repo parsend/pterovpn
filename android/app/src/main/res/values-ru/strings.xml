@@ -38,6 +38,7 @@
     <string name="configs_connect">Подключить</string>
     <string name="config_profile_active">Активно</string>
     <string name="configs_empty_local">Нет локальных конфигов. Нажми «Добавить».</string>
+    <string name="configs_local_wait">Проверяется информация, погоди</string>
     <string name="configs_empty_cloud">Список cloud пуст. Обнови или проверь cloud-config.</string>
     <string name="configs_cloud_refresh">Обновить cloud</string>
     <string name="configs_cloud_loading">Загрузка cloud…</string>
@@ -62,6 +63,11 @@
     <string name="home_status_disconnected_cd">Не подключено</string>
     <string name="config_cd_edit">Правка</string>
     <string name="config_delete">Удалить</string>
+    <string name="configs_local_refresh">Обновить проверки</string>
+    <string name="configs_local_refreshing">Обновляю ping и probe…</string>
+    <string name="configs_delete_title">Удалить профиль?</string>
+    <string name="configs_delete_message">Убрать «%1$s» с устройства.</string>
+    <string name="configs_delete_confirm">Удалить</string>
     <string name="configs_import_local">В локальные</string>
     <string name="configs_import_title">Импорт из облака</string>
     <string name="configs_import_name_label">Имя локального профиля</string>
@@ -93,6 +99,8 @@
     <string name="common_cd_nav">Навигация: %1$s</string>
     <string name="disabled_not_connected">Нечего отключать</string>
     <string name="cloud_fetch_error">Ошибка cloud: %1$s</string>
+    <string name="update_checking">Проверяю обновления…</string>
+    <string name="update_downloading">Качаю APK…</string>
     <string name="update_install_started">Установка запущена</string>
     <string name="update_none">Новых обновлений нет</string>
     <string name="update_error_fmt">Ошибка: %1$s</string>

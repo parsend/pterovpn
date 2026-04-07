@@ -40,6 +40,7 @@
     <string name="configs_connect">Connect</string>
     <string name="config_profile_active">Active</string>
     <string name="configs_empty_local">No local configs. Tap Add.</string>
+    <string name="configs_local_wait">Checking servers and probes, hang on</string>
     <string name="configs_empty_cloud">Cloud list is empty. Pull to refresh or check cloud-config.</string>
     <string name="configs_cloud_refresh">Refresh cloud</string>
     <string name="configs_cloud_loading">Loading cloud…</string>
@@ -64,6 +65,11 @@
     <string name="home_status_disconnected_cd">Disconnected</string>
     <string name="config_cd_edit">Edit</string>
     <string name="config_delete">Delete</string>
+    <string name="configs_local_refresh">Refresh probes</string>
+    <string name="configs_local_refreshing">Updating ping and probe…</string>
+    <string name="configs_delete_title">Delete profile?</string>
+    <string name="configs_delete_message">Remove \"%1$s\" from this device.</string>
+    <string name="configs_delete_confirm">Delete</string>
     <string name="configs_import_local">Import to local</string>
     <string name="configs_import_title">Import cloud profile</string>
     <string name="configs_import_name_label">Local name</string>
@@ -95,6 +101,8 @@
     <string name="common_cd_nav">Navigation: %1$s</string>
     <string name="disabled_not_connected">Nothing to disconnect</string>
     <string name="cloud_fetch_error">Cloud fetch failed: %1$s</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_downloading">Downloading APK…</string>
     <string name="update_install_started">Install started</string>
     <string name="update_none">No new updates</string>
     <string name="update_error_fmt">Error: %1$s</string>
