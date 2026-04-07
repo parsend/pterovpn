@@ -68,12 +68,12 @@ fun AppNavGraph(vm: ConnectionViewModel) {
 
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) vm.confirmVpnPermission() else vm.cancelPendingVpnConnect()
+        vm.consumeVpnPermissionIntent()
     }
 
     LaunchedEffect(vpnPrep) {
         val intent = vpnPrep ?: return@LaunchedEffect
         vpnLauncher.launch(intent)
-        vm.consumeVpnPermissionIntent()
     }
 
     LaunchedEffect(Unit) {

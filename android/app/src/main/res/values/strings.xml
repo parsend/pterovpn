@@ -54,8 +54,14 @@
     <string name="config_card_ping_na">no ping</string>
     <string name="config_chip_probe_ok">probe OK</string>
     <string name="config_chip_probe_fail">probe fail</string>
+    <string name="config_chip_probe_unknown">probe ?</string>
     <string name="config_chip_ipv6_y">IPv6</string>
     <string name="config_chip_ipv6_n">IPv4 only</string>
+    <string name="config_chip_ipv6_unknown">IPv6 ?</string>
+    <string name="config_connecting">Connecting…</string>
+    <string name="home_connecting_profile">Connecting %1$s…</string>
+    <string name="home_status_connected_cd">Connected</string>
+    <string name="home_status_disconnected_cd">Disconnected</string>
     <string name="config_cd_edit">Edit</string>
     <string name="config_delete">Delete</string>
     <string name="configs_import_local">Import to local</string>

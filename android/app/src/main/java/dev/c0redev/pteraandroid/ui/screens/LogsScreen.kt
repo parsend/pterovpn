@@ -148,7 +148,13 @@ fun LogsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    itemsIndexed(filtered, key = { ix, line -> "$ix$line" }) { _, line ->
+                    itemsIndexed(
+                        filtered,
+                        key = { ix, line ->
+                            val h = line.hashCode()
+                            (h.toLong() shl 32) xor (ix.toLong() and 0xffffffffL)
+                        },
+                    ) { _, line ->
                         val parsed = parseLogLine(line)
                         Row(
                             modifier = Modifier.fillMaxWidth(),

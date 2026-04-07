@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +56,8 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     val localItems = vm.localConfigs.collectAsState().value
     val cloudItems = vm.cloudConfigs.collectAsState().value
     val cloudLoading = vm.cloudLoading.collectAsState().value
+    val cloudProgress = vm.cloudRefreshProgress.collectAsState().value
+    val connectingName = vm.connectingProfileName.collectAsState().value
     val conn = vm.connection.collectAsState().value
     val activeProfileName = vm.activeProfileName.collectAsState().value
     var tabIndex by remember { mutableIntStateOf(0) }
@@ -140,6 +142,8 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     ConfigProfileCard(
                         item = it,
                         isActive = profileActive,
+                        primaryBusy = connectingName == it.name,
+                        primaryBusyLabel = stringResource(R.string.config_connecting),
                         primaryLabel = stringResource(R.string.configs_connect),
                         onPrimary = { vm.connect(it.name, it.config) },
                         onEdit = {
@@ -158,6 +162,7 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                 item {
                     Button(
                         onClick = { vm.refreshCloudConfigs(true) },
+                        enabled = !cloudLoading,
                         shape = RoundedCornerShape(12.dp),
                     ) {
                         Text(stringResource(R.string.configs_cloud_refresh))
@@ -165,15 +170,26 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                 }
                 if (cloudLoading) {
                     item {
-                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                CircularProgressIndicator()
-                                Text(
-                                    stringResource(R.string.configs_cloud_loading),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            if (cloudProgress > 0f) {
+                                LinearProgressIndicator(
+                                    progress = { cloudProgress.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             }
+                            Text(
+                                stringResource(R.string.configs_cloud_loading),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -192,6 +208,8 @@ fun ConfigsScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                     ConfigProfileCard(
                         item = item,
                         isActive = profileActive,
+                        primaryBusy = connectingName == item.name,
+                        primaryBusyLabel = stringResource(R.string.config_connecting),
                         primaryLabel = stringResource(R.string.configs_cloud_connect),
                         onPrimary = {
                             vm.connect(

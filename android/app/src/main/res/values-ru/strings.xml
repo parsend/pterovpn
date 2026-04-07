@@ -52,8 +52,14 @@
     <string name="config_card_ping_na">нет пинга</string>
     <string name="config_chip_probe_ok">probe OK</string>
     <string name="config_chip_probe_fail">probe fail</string>
+    <string name="config_chip_probe_unknown">probe ?</string>
     <string name="config_chip_ipv6_y">IPv6</string>
     <string name="config_chip_ipv6_n">только IPv4</string>
+    <string name="config_chip_ipv6_unknown">IPv6 ?</string>
+    <string name="config_connecting">Подключение…</string>
+    <string name="home_connecting_profile">Подключение %1$s…</string>
+    <string name="home_status_connected_cd">Подключено</string>
+    <string name="home_status_disconnected_cd">Не подключено</string>
     <string name="config_cd_edit">Правка</string>
     <string name="config_delete">Удалить</string>
     <string name="configs_import_local">В локальные</string>

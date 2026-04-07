@@ -51,6 +51,12 @@ import java.net.InetAddress
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+
+private const val PROBE_TIMEOUT_MS = 12_000L
+private const val PING_TIMEOUT_MS = 10_000L
+private const val PROBE_RETRY_DELAY_MS = 450L
 
 data class ConfigItemState(
     val name: String,
@@ -58,7 +64,9 @@ data class ConfigItemState(
     val pingMs: Long? = null,
     val pingFailed: Boolean = false,
     val probeOk: Boolean = false,
+    val probeUncertain: Boolean = false,
     val ipv6Support: Boolean = false,
+    val ipv6Uncertain: Boolean = false,
     val serverMode: String = "",
     val geo: ServerGeo? = null,
 )
@@ -78,6 +86,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     private var coreHandle = -1L
     private var pollJob: Job? = null
+    private var cloudRefreshJob: Job? = null
+    private val cloudRefreshSeq = AtomicInteger(0)
     private var pollGeneration = 0L
     private var pendingConnectCfg: Config? = null
     private var pendingConnectName: String? = null
@@ -115,6 +125,12 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private val _cloudLoading = MutableStateFlow(false)
     val cloudLoading = _cloudLoading.asStateFlow()
 
+    private val _cloudRefreshProgress = MutableStateFlow(0f)
+    val cloudRefreshProgress = _cloudRefreshProgress.asStateFlow()
+
+    private val _connectingProfileName = MutableStateFlow<String?>(null)
+    val connectingProfileName = _connectingProfileName.asStateFlow()
+
     private val _uiMessages = MutableSharedFlow<String>(
         extraBufferCapacity = 32,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -136,6 +152,43 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun clearActiveProfileUi() {
         _activeProfileName.value = null
+    }
+
+    private suspend fun probeWithRetry(server: String, token: String): CoreBridge.ProbeResult {
+        val first = CoreBridge.probePterovpn(server, token, PROBE_TIMEOUT_MS)
+        if (first.ok) return first
+        delay(PROBE_RETRY_DELAY_MS)
+        return CoreBridge.probePterovpn(server, token, PROBE_TIMEOUT_MS)
+    }
+
+    private fun enrichConfigItem(
+        name: String,
+        config: Config,
+        ping: CoreBridge.PingResult,
+        probe: CoreBridge.ProbeResult,
+        geo: ServerGeo?,
+    ): ConfigItemState {
+        val pingOk = ping.error == null
+        val probeUncertain = !probe.ok && pingOk
+        val tun6Hint = !config.tunCIDR6.isNullOrBlank()
+        val (ipv6Support, ipv6Uncertain) = when {
+            probe.ok -> probe.ipv6 to false
+            pingOk && tun6Hint -> true to false
+            pingOk -> false to true
+            else -> false to false
+        }
+        return ConfigItemState(
+            name = name,
+            config = config,
+            pingMs = ping.rttMs.takeIf { pingOk },
+            pingFailed = !pingOk,
+            probeOk = probe.ok,
+            probeUncertain = probeUncertain,
+            ipv6Support = ipv6Support,
+            ipv6Uncertain = ipv6Uncertain,
+            serverMode = probe.mode,
+            geo = geo,
+        )
     }
 
     private data class MetricDraft(
@@ -165,6 +218,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 coreHandle = -1
                 if (!hideNoSession) {
                     clearActiveProfileUi()
+                    _connectingProfileName.value = null
                     _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = normalized)
                     _logs.value = (_logs.value + listOf("ERR\t$normalized")).takeLast(500)
                     _uiMessages.tryEmit(normalized)
@@ -172,6 +226,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                     if (draft != null) finalizeActiveMetric(Instant.now(), handshakeOk = draft.handshakeOk, errorType = classifyErr(normalized))
                 } else {
                     clearActiveProfileUi()
+                    _connectingProfileName.value = null
                     _connection.value = ConnectionState(connected = false, ready = false, mode = mode, error = null)
                     val draft = activeMetric
                     if (draft != null) finalizeActiveMetric(Instant.now(), handshakeOk = draft.handshakeOk, errorType = classifyErr(normalized))
@@ -183,6 +238,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
             coreHandle = handle
+            _connectingProfileName.value = null
             _connection.value = ConnectionState(connected = true, ready = false, mode = mode, error = null)
             startLogPolling(handle, mode)
         }
@@ -216,21 +272,12 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             _localConfigs.value = coroutineScope {
                 list.map { stored ->
                     async {
-                        val ping = CoreBridge.ping(stored.config.server, 5000)
-                        val probe = CoreBridge.probePterovpn(stored.config.server, stored.config.token, 5000)
+                        val ping = CoreBridge.ping(stored.config.server, PING_TIMEOUT_MS)
+                        val probe = probeWithRetry(stored.config.server, stored.config.token)
                         val geo = withTimeoutOrNull(8000) {
                             IpWhoLookup.lookupForServerField(stored.config.server)
                         }
-                        ConfigItemState(
-                            name = stored.name,
-                            config = stored.config,
-                            pingMs = ping.rttMs.takeIf { ping.error == null },
-                            pingFailed = ping.error != null,
-                            probeOk = probe.ok,
-                            ipv6Support = probe.ipv6,
-                            serverMode = probe.mode,
-                            geo = geo,
-                        )
+                        enrichConfigItem(stored.name, stored.config, ping, probe, geo)
                     }
                 }.awaitAll()
             }
@@ -238,35 +285,46 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshCloudConfigs(fetch: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
+        cloudRefreshJob?.cancel()
+        val runId = cloudRefreshSeq.incrementAndGet()
+        cloudRefreshJob = viewModelScope.launch(Dispatchers.IO) {
             _cloudLoading.value = true
+            _cloudRefreshProgress.value = 0.04f
             try {
                 val raw = cloudRepo.cloudList(fetch)
+                if (raw.isEmpty()) {
+                    _cloudConfigs.value = emptyList()
+                    _cloudRefreshProgress.value = 1f
+                    return@launch
+                }
+                val total = raw.size
+                val done = AtomicInteger(0)
+                _cloudRefreshProgress.value = 0.08f
                 _cloudConfigs.value = coroutineScope {
                     raw.map { item ->
                         async {
-                            val ping = CoreBridge.ping(item.config.server, 5000)
-                            val probe = CoreBridge.probePterovpn(item.config.server, item.config.token, 5000)
+                            val ping = CoreBridge.ping(item.config.server, PING_TIMEOUT_MS)
+                            val probe = probeWithRetry(item.config.server, item.config.token)
                             val geo = withTimeoutOrNull(8000) {
                                 IpWhoLookup.lookupForServerField(item.config.server)
                             }
-                            ConfigItemState(
-                                name = item.name,
-                                config = item.config,
-                                pingMs = ping.rttMs.takeIf { ping.error == null },
-                                pingFailed = ping.error != null,
-                                probeOk = probe.ok,
-                                ipv6Support = probe.ipv6,
-                                serverMode = probe.mode,
-                                geo = geo,
-                            )
+                            val row = enrichConfigItem(item.name, item.config, ping, probe, geo)
+                            val n = done.incrementAndGet()
+                            _cloudRefreshProgress.value = 0.08f + 0.92f * (n.toFloat() / total)
+                            row
                         }
                     }.awaitAll()
                 }
+                _cloudRefreshProgress.value = 1f
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiMessages.tryEmit(appCtx.getString(R.string.cloud_fetch_error, e.message ?: "unknown"))
             } finally {
-                _cloudLoading.value = false
+                if (runId == cloudRefreshSeq.get()) {
+                    _cloudLoading.value = false
+                    _cloudRefreshProgress.value = 0f
+                }
             }
         }
     }
@@ -274,8 +332,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun connect(name: String, cfg: Config, applyCloudDefaults: Boolean = false, cloudServerMode: String = "", cloudProbeIpv6: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             PteraLog.i("connect name=$name")
+            _connectingProfileName.value = name
             if (_connection.value.connected || coreHandle > 0) {
-                disconnect()
+                disconnect(clearConnecting = false)
             }
             val settings = localRepo.loadClientSettings()
             var effective = cfg
@@ -327,6 +386,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeVpnPermissionIntent() { _vpnPermissionIntent.value = null }
 
     fun cancelPendingVpnConnect() {
+        _connectingProfileName.value = null
         pendingConnectCfg = null
         pendingConnectName = null
         pendingConnectSettings = null
@@ -390,8 +450,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun fillMetricBasics(cfg: Config) {
         val draft = pendingMetric ?: return
         val dns = checkDnsOk()
-        val ping = CoreBridge.ping(cfg.server, 5000)
-        val probe = CoreBridge.probePterovpn(cfg.server, cfg.token, 5000)
+        val ping = CoreBridge.ping(cfg.server, PING_TIMEOUT_MS)
+        val probe = probeWithRetry(cfg.server, cfg.token)
         pendingMetric = draft.copy(
             dnsOkBefore = dns,
             rttBeforeNs = ping.rttMs.takeIf { ping.error == null }?.times(1_000_000L),
@@ -438,6 +498,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             ContextCompat.startForegroundService(appCtx, intent)
         } catch (e: ForegroundServiceStartNotAllowedException) {
             PteraLog.w("FGS blocked: ${e.message}")
+            _connectingProfileName.value = null
             _uiMessages.tryEmit(appCtx.getString(R.string.quick_connect_fgs_blocked))
         }
     }
@@ -519,8 +580,11 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         _navToQuickTilesSettings.tryEmit(Unit)
     }
 
-    fun disconnect() {
+    fun disconnect(clearConnecting: Boolean = true) {
         PteraLog.i("disconnect coreHandle=$coreHandle")
+        if (clearConnecting) {
+            _connectingProfileName.value = null
+        }
         pollJob?.cancel()
         pollJob = null
         ++pollGeneration

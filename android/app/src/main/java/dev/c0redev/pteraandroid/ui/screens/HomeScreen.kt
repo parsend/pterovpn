@@ -35,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -82,6 +83,9 @@ fun HomeScreen(
     val logs = vm.logs.collectAsState().value
     val local = vm.localConfigs.collectAsState().value
     val cloud = vm.cloudConfigs.collectAsState().value
+    val cloudLoading = vm.cloudLoading.collectAsState().value
+    val cloudProgress = vm.cloudRefreshProgress.collectAsState().value
+    val connectingName = vm.connectingProfileName.collectAsState().value
     val haptic = LocalHapticFeedback.current
     var prevReady by remember { mutableStateOf(false) }
 
@@ -139,7 +143,11 @@ fun HomeScreen(
                     ) {
                         Icon(
                             imageVector = if (conn.connected) Icons.Default.CheckCircle else Icons.Default.Error,
-                            contentDescription = null,
+                            contentDescription = if (conn.connected) {
+                                stringResource(R.string.home_status_connected_cd)
+                            } else {
+                                stringResource(R.string.home_status_disconnected_cd)
+                            },
                             tint = if (conn.connected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(24.dp),
                         )
@@ -172,6 +180,16 @@ fun HomeScreen(
                         )
                     }
 
+                    if (!connectingName.isNullOrBlank()) {
+                        Text(
+                            text = stringResource(R.string.home_connecting_profile, connectingName),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Row(
@@ -184,6 +202,7 @@ fun HomeScreen(
                                 vm.refreshLocalConfigs()
                                 vm.refreshCloudConfigs(true)
                             },
+                            enabled = !cloudLoading,
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                         ) {
@@ -213,6 +232,17 @@ fun HomeScreen(
                                 modifier = Modifier.size(18.dp),
                             )
                             Text(stringResource(R.string.home_disconnect), modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                    if (cloudLoading) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (cloudProgress > 0f) {
+                            LinearProgressIndicator(
+                                progress = { cloudProgress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                     }
                     if (!conn.connected) {

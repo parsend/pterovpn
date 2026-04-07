@@ -133,9 +133,13 @@ class PteraVpnService : VpnService() {
     }
 
     private fun configAfterTcpOnlyProbe(cfg: Config): Config {
-        val probe = CoreBridge.probePterovpn(cfg.server, cfg.token, 10_000)
+        val probe = CoreBridge.probePterovpn(cfg.server, cfg.token, 12_000)
         if (probe.error != null) {
             PteraLog.w("configAfterTcpOnlyProbe probe err=${probe.error}, cfg unchanged")
+            return cfg
+        }
+        if (!probe.ok) {
+            PteraLog.w("configAfterTcpOnlyProbe probe not ok, cfg unchanged")
             return cfg
         }
         val noQuic = probe.capsNoQuic ?: return cfg

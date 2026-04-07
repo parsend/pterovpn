@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +66,8 @@ fun ConfigProfileCard(
     item: ConfigItemState,
     modifier: Modifier = Modifier,
     isActive: Boolean = false,
+    primaryBusy: Boolean = false,
+    primaryBusyLabel: String = "",
     primaryLabel: String,
     onPrimary: () -> Unit,
     onEdit: (() -> Unit)? = null,
@@ -193,16 +198,28 @@ fun ConfigProfileCard(
                     }
                 }
                 AssistChipCompat(
-                    text = stringResource(
-                        if (item.probeOk) R.string.config_chip_probe_ok else R.string.config_chip_probe_fail,
-                    ),
-                    ok = item.probeOk,
+                    text = when {
+                        item.probeUncertain -> stringResource(R.string.config_chip_probe_unknown)
+                        item.probeOk -> stringResource(R.string.config_chip_probe_ok)
+                        else -> stringResource(R.string.config_chip_probe_fail)
+                    },
+                    ok = when {
+                        item.probeUncertain -> null
+                        item.probeOk -> true
+                        else -> false
+                    },
                 )
                 AssistChipCompat(
-                    text = stringResource(
-                        if (item.ipv6Support) R.string.config_chip_ipv6_y else R.string.config_chip_ipv6_n,
-                    ),
-                    ok = item.ipv6Support,
+                    text = when {
+                        item.ipv6Uncertain -> stringResource(R.string.config_chip_ipv6_unknown)
+                        item.ipv6Support -> stringResource(R.string.config_chip_ipv6_y)
+                        else -> stringResource(R.string.config_chip_ipv6_n)
+                    },
+                    ok = when {
+                        item.ipv6Uncertain -> null
+                        item.ipv6Support -> true
+                        else -> false
+                    },
                 )
                 Surface(
                     shape = RoundedCornerShape(10.dp),
@@ -258,10 +275,20 @@ fun ConfigProfileCard(
                     ) {
                         Button(
                             onClick = onPrimary,
+                            enabled = !primaryBusy,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            Text(primaryLabel)
+                            if (primaryBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(if (primaryBusyLabel.isNotBlank()) primaryBusyLabel else primaryLabel)
+                            } else {
+                                Text(primaryLabel)
+                            }
                         }
                         if (onImport != null && importLabel != null) {
                             FilledTonalButton(
@@ -303,10 +330,20 @@ fun ConfigProfileCard(
                     } else {
                         Button(
                             onClick = onPrimary,
+                            enabled = !primaryBusy,
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            Text(primaryLabel)
+                            if (primaryBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(if (primaryBusyLabel.isNotBlank()) primaryBusyLabel else primaryLabel)
+                            } else {
+                                Text(primaryLabel)
+                            }
                         }
                     }
                     if (onEdit != null) {
@@ -332,18 +369,28 @@ fun ConfigProfileCard(
 }
 
 @Composable
-private fun AssistChipCompat(text: String, ok: Boolean) {
+private fun AssistChipCompat(text: String, ok: Boolean?) {
     val scheme = MaterialTheme.colorScheme
+    val bg = when (ok) {
+        true -> scheme.tertiaryContainer.copy(alpha = 0.55f)
+        false -> scheme.errorContainer.copy(alpha = 0.35f)
+        null -> scheme.surfaceContainerHighest
+    }
+    val fg = when (ok) {
+        true -> scheme.onTertiaryContainer
+        false -> scheme.onErrorContainer
+        null -> scheme.onSurfaceVariant
+    }
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = if (ok) scheme.tertiaryContainer.copy(alpha = 0.55f) else scheme.errorContainer.copy(alpha = 0.35f),
+        color = bg,
     ) {
         Text(
             text = text,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Medium,
-            color = if (ok) scheme.onTertiaryContainer else scheme.onErrorContainer,
+            color = fg,
         )
     }
 }
