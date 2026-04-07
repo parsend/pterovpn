@@ -1350,19 +1350,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfgIPv6 == nil {
 			m.cfgIPv6 = make(map[string]bool)
 		}
-		m.cfgIPv6[msg.name] = msg.ipv6
+		prevIPv6 := m.cfgIPv6[msg.name]
+		nextIPv6 := msg.ipv6
+		modeForIPv6 := strings.TrimSpace(msg.mode)
+		if modeForIPv6 == "unknown" && prevIPv6 && !nextIPv6 {
+			nextIPv6 = true
+		}
+		m.cfgIPv6[msg.name] = nextIPv6
 		if m.cloudIPv6 == nil {
 			m.cloudIPv6 = make(map[string]bool)
 		}
-		m.cloudIPv6[msg.name] = msg.ipv6
+		prevCloudIPv6 := m.cloudIPv6[msg.name]
+		nextCloudIPv6 := msg.ipv6
+		if modeForIPv6 == "unknown" && prevCloudIPv6 && !nextCloudIPv6 {
+			nextCloudIPv6 = true
+		}
+		m.cloudIPv6[msg.name] = nextCloudIPv6
 		if m.cfgMode == nil {
 			m.cfgMode = make(map[string]string)
 		}
-		m.cfgMode[msg.name] = msg.mode
+		prevMode := strings.TrimSpace(m.cfgMode[msg.name])
+		nextMode := strings.TrimSpace(msg.mode)
+		if nextMode == "unknown" && prevMode != "" && prevMode != "unknown" {
+			nextMode = prevMode
+		}
+		m.cfgMode[msg.name] = nextMode
 		if m.cloudMode == nil {
 			m.cloudMode = make(map[string]string)
 		}
-		m.cloudMode[msg.name] = msg.mode
+		prevCloudMode := strings.TrimSpace(m.cloudMode[msg.name])
+		nextCloudMode := strings.TrimSpace(msg.mode)
+		if nextCloudMode == "unknown" && prevCloudMode != "" && prevCloudMode != "unknown" {
+			nextCloudMode = prevCloudMode
+		}
+		m.cloudMode[msg.name] = nextCloudMode
 		m.refreshCfgItems()
 		m.refreshCloudItems()
 		return m, nil
