@@ -16,6 +16,8 @@ data class ProtectionOptions(
     val magicSplit: String? = null,
     val junkStyle: String? = null,
     val flushPolicy: String? = null,
+    val obfAutoRotate: Boolean = false,
+    val obfRotateEveryM: Int = 0,
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -31,6 +33,8 @@ data class ProtectionOptions(
         magicSplit?.let { j.put("magicSplit", it) }
         junkStyle?.let { j.put("junkStyle", it) }
         flushPolicy?.let { j.put("flushPolicy", it) }
+        if (obfAutoRotate) j.put("obfAutoRotate", true)
+        if (obfRotateEveryM > 0) j.put("obfRotateEveryM", obfRotateEveryM)
         return j
     }
 
@@ -48,6 +52,8 @@ data class ProtectionOptions(
             magicSplit = j.optNullableString("magicSplit"),
             junkStyle = j.optNullableString("junkStyle"),
             flushPolicy = j.optNullableString("flushPolicy"),
+            obfAutoRotate = j.optBoolean("obfAutoRotate", false),
+            obfRotateEveryM = j.optInt("obfRotateEveryM", 0),
         )
     }
 }

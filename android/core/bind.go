@@ -498,6 +498,53 @@ func Ping(server string, timeoutMs int) string {
 	return jsonString(pingResult{RTTMs: d.Milliseconds()})
 }
 
+type protectionOut struct {
+	OK         bool            `json:"ok"`
+	Error      string          `json:"error,omitempty"`
+	Protection json.RawMessage `json:"protection,omitempty"`
+}
+
+func RandomizeLiveFromProtectionJSON(jsonStr string) string {
+	var p config.ProtectionOptions
+	if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+		return jsonString(map[string]string{"error": err.Error()})
+	}
+	newP := config.RandomizeObfuscation(p)
+	config.SetLiveProtection(&newP)
+	vpn.RequestRemux()
+	b, err := json.Marshal(newP)
+	if err != nil {
+		return jsonString(map[string]string{"error": err.Error()})
+	}
+	return jsonString(protectionOut{OK: true, Protection: b})
+}
+
+func ToggleObfAutoLiveFromProtectionJSON(jsonStr string) string {
+	var p config.ProtectionOptions
+	if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+		return jsonString(map[string]string{"error": err.Error()})
+	}
+	p.ObfAutoRotate = !p.ObfAutoRotate
+	config.SetLiveProtection(&p)
+	vpn.RequestRemux()
+	b, err := json.Marshal(p)
+	if err != nil {
+		return jsonString(map[string]string{"error": err.Error()})
+	}
+	return jsonString(protectionOut{OK: true, Protection: b})
+}
+
+func ApplyLiveProtectionJSON(jsonStr string) string {
+	var p config.ProtectionOptions
+	if err := json.Unmarshal([]byte(jsonStr), &p); err != nil {
+		return jsonString(map[string]string{"error": err.Error()})
+	}
+	config.SanitizeObfRotateFields(&p)
+	config.SetLiveProtection(&p)
+	vpn.RequestRemux()
+	return jsonString(map[string]bool{"ok": true})
+}
+
 func QuicDialTargetIPs(server string, quicServer string) string {
 	server = strings.TrimSpace(server)
 	quicServer = strings.TrimSpace(quicServer)

@@ -47,6 +47,8 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
     var magicSplit by remember { mutableStateOf("") }
     var junkStyle by remember { mutableStateOf("") }
     var flushPolicy by remember { mutableStateOf("") }
+    var obfAutoRotate by remember { mutableStateOf(false) }
+    var obfRotateEveryM by remember { mutableStateOf("5") }
 
     LaunchedEffect(current) {
         obf = current?.obfuscation ?: ""
@@ -61,6 +63,9 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
         magicSplit = current?.magicSplit ?: ""
         junkStyle = current?.junkStyle ?: ""
         flushPolicy = current?.flushPolicy ?: ""
+        obfAutoRotate = current?.obfAutoRotate ?: false
+        val em = current?.obfRotateEveryM ?: 0
+        obfRotateEveryM = if (em > 0) em.toString() else "5"
     }
 
     val applyPreset = { p: ProtectionOptions ->
@@ -76,6 +81,9 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
         magicSplit = p.magicSplit ?: ""
         junkStyle = p.junkStyle ?: ""
         flushPolicy = p.flushPolicy ?: ""
+        obfAutoRotate = p.obfAutoRotate
+        val em = p.obfRotateEveryM
+        obfRotateEveryM = if (em > 0) em.toString() else "5"
     }
 
     LazyColumn(
@@ -157,6 +165,59 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                         shape = RoundedCornerShape(12.dp),
                     ) {
                         Text("Авто по метрикам сессий")
+                    }
+                }
+            }
+        }
+        item {
+            SectionCard {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Ротация obfuscation",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "Авто каждые N мин в ядре. Рандом сразу. При активном VPN применяется без реконнекта (TCP и UDP по TCP).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Авторандом", style = MaterialTheme.typography.bodyLarge)
+                        Switch(
+                            checked = obfAutoRotate,
+                            onCheckedChange = { obfAutoRotate = it },
+                            colors = androidx.compose.material3.SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                            ),
+                        )
+                    }
+                    StyledTextField(
+                        value = obfRotateEveryM,
+                        onValueChange = { obfRotateEveryM = it },
+                        label = "интервал (мин, 0=5)",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
+                            onClick = { vm.randomizeObfuscationLive() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Рандом сейчас")
+                        }
+                        FilledTonalButton(
+                            onClick = { vm.toggleObfAutoLive() },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Переключить авто")
+                        }
                     }
                 }
             }
@@ -276,6 +337,8 @@ fun ProtectionScreen(vm: ConnectionViewModel, padding: PaddingValues) {
                                     magicSplit = magicSplit.takeIf { it.isNotBlank() },
                                     junkStyle = junkStyle.takeIf { it.isNotBlank() },
                                     flushPolicy = flushPolicy.takeIf { it.isNotBlank() },
+                                    obfAutoRotate = obfAutoRotate,
+                                    obfRotateEveryM = obfRotateEveryM.toIntOrNull() ?: 0,
                                 ))
                             },
                             modifier = Modifier.weight(1f),

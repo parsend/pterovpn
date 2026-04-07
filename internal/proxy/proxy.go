@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
 	"github.com/unitdevgcc/pterovpn/internal/config"
@@ -14,6 +15,9 @@ import (
 )
 
 func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool) error {
+	config.InitLiveProtectionFrom(prot)
+	defer config.ClearLiveProtection()
+
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
@@ -28,6 +32,8 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+
+	go proxyObfRotateLoop(ctx, prot)
 
 	for {
 		conn, err := ln.Accept()
@@ -122,7 +128,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 		}
 	}
 
-	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, nil, false)
+	remote, err := tunnel.Dial(serverAddrs, ip, port, token, config.EffectiveProtection(prot), transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, nil, false)
 	if err != nil {
 		clientlog.DPI("proxy: tunnel %s:%d: %v", host, port, err)
 		reply(client, 1)
@@ -143,4 +149,31 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 
 func reply(c net.Conn, rep byte) {
 	c.Write([]byte{5, rep, 0, 1, 0, 0, 0, 0, 0, 0})
+}
+
+func proxyObfRotateLoop(ctx context.Context, base *config.ProtectionOptions) {
+	d := 5 * time.Minute
+	if p := config.EffectiveProtection(base); p != nil && p.ObfRotateEveryM > 0 {
+		d = time.Duration(p.ObfRotateEveryM) * time.Minute
+	}
+	t := time.NewTicker(d)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			cur := config.EffectiveProtection(base)
+			if cur == nil || !cur.ObfAutoRotate {
+				continue
+			}
+			newP := config.RandomizeObfuscation(*cur)
+			if err := config.SaveProtection(newP); err != nil {
+				clientlog.Drop("proxy: obf rotate save: %v", err)
+				continue
+			}
+			config.SetLiveProtection(&newP)
+			clientlog.Info("proxy: obfuscation profile rotated")
+		}
+	}
 }

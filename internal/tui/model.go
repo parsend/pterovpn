@@ -22,6 +22,7 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/metrics"
 	"github.com/unitdevgcc/pterovpn/internal/probe"
 	"github.com/unitdevgcc/pterovpn/internal/update"
+	"github.com/unitdevgcc/pterovpn/internal/vpn"
 )
 
 const (
@@ -658,6 +659,8 @@ type logMsg string
 
 type WatchdogReconnectMsg struct{}
 
+type obfRotMsg struct{ err error }
+
 type pingResultMsg struct {
 	name   string
 	d      time.Duration
@@ -902,8 +905,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case "r", "R":
+			if m.tab == tabProtection && !m.protectionEditing {
+				return m, obfRandomCmd(m.protectionTarget)
+			}
 			if m.tab == tabCloud && !m.cloudLoading {
 				return m, m.reloadCloud(true)
+			}
+		case "a", "A":
+			if m.tab == tabProtection && !m.protectionEditing {
+				return m, obfToggleAutoCmd(m.protectionTarget)
 			}
 		case "d", "D", "delete":
 			if m.tab == tabConfig && !m.adding && !m.editing && m.deletingCfg == "" && len(m.cfgs) > 0 {
@@ -1131,6 +1141,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.protectionEditing && len(m.protectionInputs) == 12 {
 				opts := protectionOptsFromInputs(m.protectionInputs)
+				var prev config.ProtectionOptions
+				if m.protectionTarget == "" {
+					prev, _ = config.LoadProtection()
+				} else {
+					if cfg, err := config.LoadByName(m.protectionTarget); err == nil && cfg.Protection != nil {
+						prev = *cfg.Protection
+					}
+				}
+				opts.ObfAutoRotate = prev.ObfAutoRotate
+				opts.ObfRotateEveryM = prev.ObfRotateEveryM
 				if m.protectionTarget == "" {
 					_ = config.SaveProtection(opts)
 				} else {
@@ -1297,6 +1317,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = string(msg)
 		m.activeCfg = ""
 		return m, nil
+	case obfRotMsg:
+		if msg.err != nil {
+			m.err = "obf: " + msg.err.Error()
+		} else {
+			m.err = ""
+		}
+		return m, nil
 	case logMsg:
 		m.logsMu.Lock()
 		if m.tab == tabLogs {
@@ -1458,6 +1485,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func obfRandomCmd(protectionTarget string) tea.Cmd {
+	return func() tea.Msg {
+		err := config.ApplyObfuscationRotationNowScoped(protectionTarget)
+		vpn.RequestRemux()
+		return obfRotMsg{err: err}
+	}
+}
+
+func obfToggleAutoCmd(protectionTarget string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := config.ToggleObfAutoRotateScoped(protectionTarget)
+		return obfRotMsg{err: err}
+	}
+}
+
 func waitConnect(cfg config.Config, configName string, reconnectCount int, settings config.ClientSettings, fn ConnectFn) tea.Cmd {
 	return func() tea.Msg {
 		stop, err := fn(cfg, configName, reconnectCount, settings)
@@ -1529,8 +1571,8 @@ func (m *Model) protectionView() string {
 		if m.protectionTarget == "" {
 			opts, _ = config.LoadProtection()
 		} else {
-			cfg, _ := config.LoadByName(m.protectionTarget)
-			if cfg.Protection != nil {
+			cfg, err := config.LoadByName(m.protectionTarget)
+			if err == nil && cfg.Protection != nil {
 				opts = *cfg.Protection
 			}
 		}
@@ -1560,7 +1602,22 @@ func (m *Model) protectionView() string {
 		b.WriteString(kvLabel.Render("flushPolicy:") + " ")
 		b.WriteString(kvValue.Render(orEmpty(opts.FlushPolicy, "once")) + "\n")
 		b.WriteString("  ")
-		b.WriteString(hintKey.Render("E") + " ")
+		autoStr := "off"
+		if opts.ObfAutoRotate {
+			autoStr = "on"
+		}
+		b.WriteString(kvLabel.Render("obfAutoRotate:") + " ")
+		b.WriteString(kvValue.Render(autoStr) + "   ")
+		everyM := opts.ObfRotateEveryM
+		if everyM <= 0 {
+			everyM = 5
+		}
+		b.WriteString(kvLabel.Render("интервал мин:") + " ")
+		b.WriteString(kvValue.Render(strconv.Itoa(everyM)) + "\n")
+		b.WriteString("  ")
+		b.WriteString(hintKey.Render("R") + " ")
+		b.WriteString(hintText.Render("рандом  ") + hintKey.Render("A") + " ")
+		b.WriteString(hintText.Render("авто  ") + hintKey.Render("E") + " ")
 		b.WriteString(hintText.Render("редактировать") + "\n")
 	}
 

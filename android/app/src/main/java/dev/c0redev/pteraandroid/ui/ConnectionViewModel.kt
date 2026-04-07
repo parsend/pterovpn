@@ -572,7 +572,69 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun saveClientSettings(s: ClientSettings) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveClientSettings(s); reloadProtectionAndSettings() } }
-    fun saveGlobalProtection(p: dev.c0redev.pteraandroid.domain.model.ProtectionOptions?) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveProtection(p); reloadProtectionAndSettings() } }
+
+    fun saveGlobalProtection(p: dev.c0redev.pteraandroid.domain.model.ProtectionOptions?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            localRepo.saveProtection(p)
+            reloadProtectionAndSettings()
+            if (p != null && _connection.value.connected && coreHandle > 0) {
+                runCatching { CoreBridge.applyLiveProtectionJson(p.toJson().toString()) }
+                    .onFailure { e -> PteraLog.w("applyLiveProtectionJson: ${e.message}") }
+            }
+        }
+    }
+
+    fun randomizeObfuscationLive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val base = localRepo.loadProtection() ?: dev.c0redev.pteraandroid.domain.model.ProtectionOptions()
+            runCatching {
+                val j = CoreBridge.randomizeLiveFromProtectionJson(base.toJson().toString())
+                if (j.optString("error").isNotEmpty()) {
+                    _uiMessages.tryEmit("obf: ${j.optString("error")}")
+                    return@launch
+                }
+                if (!j.optBoolean("ok", false) || !j.has("protection")) {
+                    _uiMessages.tryEmit("obf: bad response")
+                    return@launch
+                }
+                val prot = dev.c0redev.pteraandroid.domain.model.ProtectionOptions.fromJson(j.getJSONObject("protection"))
+                localRepo.saveProtection(prot)
+                if (_connection.value.connected && coreHandle > 0) {
+                    CoreBridge.applyLiveProtectionJson(prot.toJson().toString())
+                }
+                reloadProtectionAndSettings()
+            }.onFailure { e ->
+                PteraLog.e("randomizeObfuscationLive", e)
+                _uiMessages.tryEmit("obf: ${e.message}")
+            }
+        }
+    }
+
+    fun toggleObfAutoLive() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val base = localRepo.loadProtection() ?: dev.c0redev.pteraandroid.domain.model.ProtectionOptions()
+            runCatching {
+                val j = CoreBridge.toggleObfAutoLiveFromProtectionJson(base.toJson().toString())
+                if (j.optString("error").isNotEmpty()) {
+                    _uiMessages.tryEmit("obf: ${j.optString("error")}")
+                    return@launch
+                }
+                if (!j.optBoolean("ok", false) || !j.has("protection")) {
+                    _uiMessages.tryEmit("obf: bad response")
+                    return@launch
+                }
+                val prot = dev.c0redev.pteraandroid.domain.model.ProtectionOptions.fromJson(j.getJSONObject("protection"))
+                localRepo.saveProtection(prot)
+                if (_connection.value.connected && coreHandle > 0) {
+                    CoreBridge.applyLiveProtectionJson(prot.toJson().toString())
+                }
+                reloadProtectionAndSettings()
+            }.onFailure { e ->
+                PteraLog.e("toggleObfAutoLive", e)
+                _uiMessages.tryEmit("obf: ${e.message}")
+            }
+        }
+    }
     fun upsertLocalConfig(name: String, cfg: Config) { viewModelScope.launch(Dispatchers.IO) { localRepo.saveConfig(name, cfg); refreshLocalConfigs() } }
     fun deleteLocalConfig(name: String) {
         viewModelScope.launch(Dispatchers.IO) {

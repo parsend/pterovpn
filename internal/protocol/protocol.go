@@ -632,22 +632,15 @@ func randPadLenN(m int) int {
 	if m <= 0 {
 		return 0
 	}
-	return frand.IntN(m + 1)
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(m+1)))
+	if err != nil {
+		return frand.IntN(m + 1)
+	}
+	return int(n.Int64())
 }
 
 func fillUdpPadFast(p []byte) {
-	for len(p) >= 8 {
-		binary.LittleEndian.PutUint64(p, frand.Uint64())
-		p = p[8:]
-	}
-	if len(p) == 0 {
-		return
-	}
-	u := frand.Uint64()
-	for i := range p {
-		p[i] = byte(u)
-		u >>= 8
-	}
+	_, _ = rand.Read(p)
 }
 
 func RoleUDP() byte { return roleUDP }

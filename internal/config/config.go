@@ -41,6 +41,9 @@ type ProtectionOptions struct {
 	MagicSplit  string `json:"magicSplit,omitempty"`
 	JunkStyle   string `json:"junkStyle,omitempty"`
 	FlushPolicy string `json:"flushPolicy,omitempty"`
+	ObfSeed string `json:"obfSeed,omitempty"`
+	ObfAutoRotate bool `json:"obfAutoRotate,omitempty"`
+	ObfRotateEveryM int `json:"obfRotateEveryM,omitempty"`
 }
 
 func Dir() (string, error) {

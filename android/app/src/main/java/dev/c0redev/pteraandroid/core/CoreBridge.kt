@@ -121,6 +121,21 @@ object CoreBridge {
         return res
     }
 
+    fun randomizeLiveFromProtectionJson(json: String): JSONObject {
+        val raw = Core.randomizeLiveFromProtectionJSON(json)
+        return JSONObject(raw)
+    }
+
+    fun toggleObfAutoLiveFromProtectionJson(json: String): JSONObject {
+        val raw = Core.toggleObfAutoLiveFromProtectionJSON(json)
+        return JSONObject(raw)
+    }
+
+    fun applyLiveProtectionJson(json: String): JSONObject {
+        val raw = Core.applyLiveProtectionJSON(json)
+        return JSONObject(raw)
+    }
+
     fun quicDialTargetIPs(server: String, quicServer: String): QuicIPsResult {
         PteraLog.i("quicDialTargetIPs server=$server quicServer=$quicServer")
         val raw = Core.quicDialTargetIPs(server, quicServer)

@@ -66,6 +66,8 @@ func Run(ctx context.Context, opt Options) error {
 	if opt.DualTransport && tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
 		clientlog.Info("vpn: dual transport blend QUIC/TCP по метрикам пути; при провале QUIC сдвиг в TCP-first и пробное восстановление QUIC")
 	}
+	config.InitLiveProtectionFrom(opt.Protection)
+
 	if tunnel.UsesQUICTransport(opt.Transport, opt.QuicServer) {
 		if ep, derived, err := tunnel.ResolveQUICDialAddr(opt.ServerAddrs, opt.QuicServer); err == nil {
 			if derived {
@@ -78,6 +80,7 @@ func Run(ctx context.Context, opt Options) error {
 
 	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection, opt.Transport, opt.QuicServer, opt.QuicServerName, opt.QuicSkipVerify, opt.QuicCertPinSHA256, opt.QuicTLSRoots)
 	if err != nil {
+		config.ClearLiveProtection()
 		return err
 	}
 
@@ -88,6 +91,7 @@ func Run(ctx context.Context, opt Options) error {
 		dev, closeDev, err = opt.CreateDevice()
 		if err != nil {
 			udpMux.Close()
+			config.ClearLiveProtection()
 			return err
 		}
 		defer closeDev()
@@ -98,6 +102,7 @@ func Run(ctx context.Context, opt Options) error {
 		dev, err = fdbased.Open(strconv.Itoa(opt.TunFD), uint32(opt.MTU), 0)
 		if err != nil {
 			udpMux.Close()
+			config.ClearLiveProtection()
 			return err
 		}
 		defer dev.Close()
@@ -113,17 +118,21 @@ func Run(ctx context.Context, opt Options) error {
 		dualSel: dualSel,
 	}
 
+	go h.obfRotateLoop(ctx)
+
 	st, err := core.CreateStack(&core.Config{
 		LinkEndpoint:     dev,
 		TransportHandler: h,
 	})
 	if err != nil {
 		udpMux.Close()
+		config.ClearLiveProtection()
 		return err
 	}
 
 	defer st.Close()
 	defer udpMux.Close()
+	defer config.ClearLiveProtection()
 
 	clientlog.OK("vpn: netstack ready")
 	if opt.Ready != nil {
@@ -148,8 +157,9 @@ type udpAssoc struct {
 }
 
 type udpMux struct {
-	chans     []*udpChan
-	assoc     sync.Map
+	chansMu sync.Mutex
+	chans   []*udpChan
+	assoc   sync.Map
 	quicConn  *tunnel.QUICConn
 	quicClose func()
 }
@@ -222,13 +232,21 @@ func (m *udpMux) unregister(k udpAssocKey) {
 }
 
 func (m *udpMux) pick(k udpAssocKey) *udpChan {
+	if len(m.chans) == 0 {
+		return nil
+	}
 	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%d", k.SrcPort, k.DstIP, k.DstPort)))
 	idx := int(h[0]) % len(m.chans)
 	return m.chans[idx]
 }
 
 func (m *udpMux) send(k udpAssocKey, payload []byte) error {
+	m.chansMu.Lock()
 	ch := m.pick(k)
+	m.chansMu.Unlock()
+	if ch == nil {
+		return errors.New("udp mux: no channel")
+	}
 	ip := net.ParseIP(k.DstIP)
 	f := protocol.UDPFrame{SrcPort: k.SrcPort, DstIP: ip, DstPort: k.DstPort, Payload: payload}
 	return ch.Send(f)
@@ -258,7 +276,8 @@ type udpChan struct {
 	cb       func(protocol.UDPFrame)
 }
 
-func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), prot *config.ProtectionOptions, transport, quicServer string) (*udpChan, error) {
+func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), base *config.ProtectionOptions, transport, quicServer string) (*udpChan, error) {
+	prot := config.EffectiveProtection(base)
 	var last error
 	start := int(id) % len(addrs)
 	for i := 0; i < len(addrs); i++ {
@@ -393,7 +412,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	slot := protocol.TimeSlot()
 	var err error
 	var fellBackTCP, tcpOnly bool
-	sconn, fellBackTCP, tcpOnly, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport, h.dualSel)
+	sconn, fellBackTCP, tcpOnly, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, config.EffectiveProtection(h.opt.Protection), h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport, h.dualSel)
 	if h.opt.DualTransport && shared != nil {
 		if fellBackTCP || tcpOnly {
 			tag = "TCP"
