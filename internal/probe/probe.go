@@ -167,7 +167,7 @@ func parseProbeCaps(raw []byte) (bool, bool, *protocol.ServerHelloCaps, error) {
 
 func ServerModeFromCaps(caps *protocol.ServerHelloCaps) string {
 	if caps == nil {
-		return "tcp only"
+		return "unknown"
 	}
 	hasTCP := (caps.TransportMask & protocol.TransportTCP) != 0
 	hasQUIC := (caps.TransportMask & protocol.TransportQUIC) != 0
