@@ -12,6 +12,8 @@ serverMode=tcp-only
 # quicKeyPath=quic/auto.key
 
 # quicAlpn=pteravpn
+# obfsProfileId=0
+# при 1 клиент после probe усиливает junk/tls-преамбулу и фрагментацию без правки protection.json
 # quicMaxStreams=0
 # quicMaxHandshakes=0
 # quicIdleTimeoutMs=900000

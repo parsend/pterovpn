@@ -164,6 +164,7 @@ class ProtocolTest {
         8443,
         2,
         new byte[]{9, 8, 7},
+        null,
         null);
     var out = new ByteArrayOutputStream();
     Protocol.writeServerHelloCaps(out, caps);
@@ -190,10 +191,30 @@ class ProtocolTest {
         0,
         0,
         new byte[]{1},
-        pin);
+        pin,
+        null);
     var out = new ByteArrayOutputStream();
     Protocol.writeServerHelloCaps(out, caps);
     var got = Protocol.readServerHelloCaps(new ByteArrayInputStream(out.toByteArray()));
     assertArrayEquals(pin, got.quicLeafPinSha256());
+  }
+
+  @Test
+  void serverHelloCapsRoundtripQuicAlpn() throws IOException {
+    var caps = new Protocol.ServerHelloCaps(
+        Protocol.CAPS_VERSION,
+        0,
+        Protocol.TRANSPORT_QUIC,
+        0,
+        4433,
+        0,
+        0,
+        new byte[]{2},
+        null,
+        "pteravpn");
+    var out = new ByteArrayOutputStream();
+    Protocol.writeServerHelloCaps(out, caps);
+    var got = Protocol.readServerHelloCaps(new ByteArrayInputStream(out.toByteArray()));
+    assertEquals("pteravpn", got.quicAlpn());
   }
 }

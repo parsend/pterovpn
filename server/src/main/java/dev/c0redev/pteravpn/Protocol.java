@@ -195,6 +195,8 @@ final class Protocol {
   }
 
   static final int HELLO_CAPS_EXT_QUIC_LEAF_PIN = 1;
+  static final int HELLO_CAPS_EXT_QUIC_ALPN = 2;
+  static final int MAX_QUIC_ALPN_LEN = 32;
 
   static void writeServerHelloCaps(OutputStream out, ServerHelloCaps caps) throws IOException {
     out.write(caps.version() & 0xff);
@@ -213,6 +215,16 @@ final class Protocol {
       out.write(HELLO_CAPS_EXT_QUIC_LEAF_PIN);
       out.write(qp);
     }
+    String alpn = caps.quicAlpn();
+    if (alpn != null && !alpn.isBlank()) {
+      byte[] raw = alpn.getBytes(StandardCharsets.US_ASCII);
+      if (raw.length < 1 || raw.length > MAX_QUIC_ALPN_LEN) {
+        throw new IOException("bad quic alpn len");
+      }
+      out.write(HELLO_CAPS_EXT_QUIC_ALPN);
+      out.write(raw.length & 0xff);
+      out.write(raw);
+    }
     out.flush();
   }
 
@@ -228,12 +240,24 @@ final class Protocol {
     if (nonceLen > MAX_HELLO_CAPS_NONCE) throw new IOException("caps nonce too long");
     byte[] nonce = nonceLen == 0 ? new byte[0] : readN(in, nonceLen);
     byte[] qpin = null;
-    int ext = in.read();
-    if (ext >= 0) {
-      if (ext != HELLO_CAPS_EXT_QUIC_LEAF_PIN) {
+    String quicAlpn = null;
+    while (true) {
+      int ext = in.read();
+      if (ext < 0) {
+        break;
+      }
+      if (ext == HELLO_CAPS_EXT_QUIC_LEAF_PIN) {
+        qpin = readN(in, 32);
+      } else if (ext == HELLO_CAPS_EXT_QUIC_ALPN) {
+        int al = readU8(in);
+        if (al < 1 || al > MAX_QUIC_ALPN_LEN) {
+          throw new IOException("bad quic alpn ext len");
+        }
+        byte[] ab = readN(in, al);
+        quicAlpn = new String(ab, StandardCharsets.US_ASCII);
+      } else {
         throw new IOException("bad caps extension tag: " + ext);
       }
-      qpin = readN(in, 32);
     }
     return new ServerHelloCaps(
         version,
@@ -244,7 +268,8 @@ final class Protocol {
         tcpPortHint,
         obfsProfileId,
         nonce,
-        qpin);
+        qpin,
+        quicAlpn);
   }
 
   record Handshake(byte role, int channelId, String token) {}
@@ -259,7 +284,8 @@ final class Protocol {
       int tcpPortHint,
       int obfsProfileId,
       byte[] nonce,
-      byte[] quicLeafPinSha256) {}
+      byte[] quicLeafPinSha256,
+      String quicAlpn) {}
 
   record ClientOptions(int padS4) {
     static Optional<ClientOptions> parse(String json) {

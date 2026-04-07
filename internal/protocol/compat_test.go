@@ -94,3 +94,50 @@ func TestServerHelloCapsQuicPinRoundtrip(t *testing.T) {
 		t.Fatalf("pin mismatch")
 	}
 }
+
+func TestServerHelloCapsAlpnRoundtrip(t *testing.T) {
+	caps := ServerHelloCaps{
+		Version:       CapsVersion,
+		TransportMask: TransportQUIC,
+		QuicPort:      4433,
+		Nonce:         []byte{2},
+		QuicAlpn:      "pteravpn",
+	}
+	var buf bytes.Buffer
+	if err := WriteServerHelloCaps(&buf, caps); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadServerHelloCaps(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.QuicAlpn != "pteravpn" {
+		t.Fatalf("alpn got=%q", got.QuicAlpn)
+	}
+}
+
+func TestServerHelloCapsPinAndAlpnRoundtrip(t *testing.T) {
+	pin := make([]byte, 32)
+	for i := range pin {
+		pin[i] = byte(i + 1)
+	}
+	caps := ServerHelloCaps{
+		Version:           CapsVersion,
+		TransportMask:     TransportQUIC,
+		QuicPort:          4433,
+		Nonce:             []byte{3},
+		QuicLeafPinSHA256: pin,
+		QuicAlpn:          "custom",
+	}
+	var buf bytes.Buffer
+	if err := WriteServerHelloCaps(&buf, caps); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadServerHelloCaps(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.QuicAlpn != "custom" || !bytes.Equal(got.QuicLeafPinSHA256, pin) {
+		t.Fatalf("got=%+v", got)
+	}
+}

@@ -61,7 +61,7 @@ func ProbePterovpnWithCaps(addr string, wireToken string, timeout time.Duration)
 	slot := protocol.TimeSlot()
 	junkCount, junkMin, junkMax := 2, 64, 512
 	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() })
+	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() }, 0)
 	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, badToken); err != nil {
 		log.Printf("probe: handshake write: %v", err)
 		return false, false, nil, err
@@ -92,63 +92,29 @@ func ProbePterovpnWithCaps(addr string, wireToken string, timeout time.Duration)
 func readProbeHelloPayload(c net.Conn, timeout time.Duration) ([]byte, error) {
 	deadline := time.Now().Add(timeout)
 	_ = c.SetReadDeadline(deadline)
-	buf := make([]byte, protocol.HelloCapsHeaderLen+protocol.HelloCapsMaxNonceLen)
-	if _, err := io.ReadFull(c, buf[:1]); err != nil {
+	h := make([]byte, protocol.HelloCapsHeaderLen)
+	if _, err := io.ReadFull(c, h); err != nil {
 		return nil, err
 	}
-	_ = c.SetReadDeadline(deadline)
-	_, err := io.ReadFull(c, buf[1:protocol.HelloCapsHeaderLen])
-	switch err {
-	case nil:
-		nl := int(buf[protocol.HelloCapsHeaderLen-1])
-		if nl < 0 || nl > protocol.HelloCapsMaxNonceLen {
-			return buf[:protocol.HelloCapsHeaderLen], nil
-		}
-		if nl == 0 {
-			return appendQuicPinExt(c, deadline, buf[:protocol.HelloCapsHeaderLen])
-		}
+	nl := int(h[protocol.HelloCapsHeaderLen-1])
+	if nl < 0 || nl > protocol.HelloCapsMaxNonceLen {
+		return h, nil
+	}
+	raw := append([]byte(nil), h...)
+	if nl > 0 {
+		nonce := make([]byte, nl)
 		_ = c.SetReadDeadline(deadline)
-		if _, err := io.ReadFull(c, buf[protocol.HelloCapsHeaderLen:protocol.HelloCapsHeaderLen+nl]); err != nil {
+		if _, err := io.ReadFull(c, nonce); err != nil {
 			return nil, err
 		}
-		raw := buf[:protocol.HelloCapsHeaderLen+nl]
-		return appendQuicPinExt(c, deadline, raw)
-	case io.EOF, io.ErrUnexpectedEOF:
-		return buf[:1], nil
-	default:
+		raw = append(raw, nonce...)
+	}
+	_ = c.SetReadDeadline(deadline)
+	rest, err := io.ReadAll(c)
+	if err != nil {
 		return nil, err
 	}
-}
-
-func appendQuicPinExt(c net.Conn, deadline time.Time, raw []byte) ([]byte, error) {
-	_ = c.SetReadDeadline(deadline)
-	var tag [1]byte
-	n, err := c.Read(tag[:])
-	if n == 0 {
-		if err == io.EOF {
-			return raw, nil
-		}
-		if ne, ok := err.(net.Error); ok && ne.Timeout() {
-			return raw, nil
-		}
-		if err != nil {
-			return raw, nil
-		}
-		return raw, nil
-	}
-	if n != 1 || tag[0] != 1 {
-		return raw, nil
-	}
-	pin := make([]byte, 32)
-	_ = c.SetReadDeadline(deadline)
-	if _, err := io.ReadFull(c, pin); err != nil {
-		return raw, err
-	}
-	out := make([]byte, 0, len(raw)+33)
-	out = append(out, raw...)
-	out = append(out, 1)
-	out = append(out, pin...)
-	return out, nil
+	return append(raw, rest...), nil
 }
 
 func parseProbeCaps(raw []byte) (bool, bool, *protocol.ServerHelloCaps, error) {

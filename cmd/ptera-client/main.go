@@ -52,6 +52,7 @@ type runOpts struct {
 	proxyListen       string
 	systemProxy       bool
 	dualTransport     bool
+	quicAlpn          string
 	watchdogFail      chan struct{}
 	watchdogMark      *atomic.Bool
 }
@@ -124,7 +125,12 @@ func run() error {
 		return err
 	}
 
+	var probeCaps *protocol.ServerHelloCaps
+	if len(addrs) > 0 {
+		_, _, probeCaps, _ = probe.ProbePterovpnWithCaps(addrs[0], *token, 5*time.Second)
+	}
 	prot, _ := config.LoadProtection()
+	prot = config.MergeProtectionWithCaps(prot, probeCaps)
 	var quicRoots *x509.CertPool
 	if p := strings.TrimSpace(*quicCaCertFile); p != "" {
 		pool, err := config.LoadQUICCAPool(p)
@@ -132,10 +138,6 @@ func run() error {
 			return err
 		}
 		quicRoots = pool
-	}
-	var probeCaps *protocol.ServerHelloCaps
-	if len(addrs) > 0 {
-		_, _, probeCaps, _ = probe.ProbePterovpnWithCaps(addrs[0], *token, 5*time.Second)
 	}
 	cfgProbe := config.Config{Transport: *transport, QuicServer: *quicServer}
 	config.ApplyTcpOnlyIfServerHasNoQUIC(&cfgProbe, probeCaps)
@@ -166,6 +168,7 @@ func run() error {
 		proxyListen:       *proxyListen,
 		systemProxy:       *systemProxy,
 		dualTransport:     quicDualFromCaps(probeCaps, cfgProbe.Transport, cfgProbe.QuicServer),
+		quicAlpn:           config.EffectiveQuicAlpn(config.Config{}, probeCaps),
 	}
 	return runPlatform(context.Background(), addrs, opts, nil)
 }

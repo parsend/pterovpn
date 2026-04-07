@@ -290,8 +290,9 @@ final class QuicServer implements AutoCloseable {
               int tcpPortHint = cfg.listenPorts().isEmpty() ? 0 : cfg.listenPorts().get(0);
               Protocol.writeServerHelloCaps(out, new Protocol.ServerHelloCaps(
                   Protocol.CAPS_VERSION, legacyIpv6, transportMask, featureBits,
-                  cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, 0, new byte[0],
-                  QuicServer.getAdvertisedQuicLeafPin()));
+                  cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, cfg.obfsProfileId(), new byte[0],
+                  QuicServer.getAdvertisedQuicLeafPin(),
+                  cfg.quicEnabled() ? cfg.quicAlpn() : null));
               return;
             }
             if (hs.role() == Protocol.ROLE_UDP) {

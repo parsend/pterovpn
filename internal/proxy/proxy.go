@@ -13,7 +13,7 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/tunnel"
 )
 
-func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool) error {
+func Run(ctx context.Context, listenAddr string, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicAlpn string) error {
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return err
@@ -38,11 +38,11 @@ func Run(ctx context.Context, listenAddr string, serverAddrs []string, token str
 			clientlog.Err("proxy: accept: %v", err)
 			continue
 		}
-		go handleSOCKS5(conn, serverAddrs, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots)
+		go handleSOCKS5(conn, serverAddrs, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicAlpn)
 	}
 }
 
-func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool) {
+func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicAlpn string) {
 	defer client.Close()
 
 	buf := make([]byte, 257)
@@ -122,7 +122,7 @@ func handleSOCKS5(client net.Conn, serverAddrs []string, token string, prot *con
 		}
 	}
 
-	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, nil, false)
+	remote, err := tunnel.Dial(serverAddrs, ip, port, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, nil, false, quicAlpn)
 	if err != nil {
 		clientlog.DPI("proxy: tunnel %s:%d: %v", host, port, err)
 		reply(client, 1)

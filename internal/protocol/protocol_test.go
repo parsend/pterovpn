@@ -137,7 +137,7 @@ func TestWriteHandshakeTokenTooLong(t *testing.T) {
 
 func TestWriteJunk(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunk(&buf, 3, 4, 8, nil); err != nil {
+	if err := WriteJunk(&buf, 3, 4, 8, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 12 {
@@ -147,7 +147,7 @@ func TestWriteJunk(t *testing.T) {
 
 func TestWriteJunkZero(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunk(&buf, 0, 4, 8, nil); err != nil {
+	if err := WriteJunk(&buf, 0, 4, 8, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() != 0 {
@@ -178,7 +178,7 @@ func TestApplyTimeVariation(t *testing.T) {
 
 func TestWriteJunkWithSlot(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteJunk(&buf, 2, 64, 256, nil); err != nil {
+	if err := WriteJunk(&buf, 2, 64, 256, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 128 {
@@ -189,7 +189,7 @@ func TestWriteJunkWithSlot(t *testing.T) {
 func TestJunkThenHandshake(t *testing.T) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	_ = WriteJunk(w, 2, 64, 256, nil)
+	_ = WriteJunk(w, 2, 64, 256, nil, 0)
 	_ = WriteHandshake(w, RoleTCP(), 0, "t")
 	r := bufio.NewReader(&buf)
 	if err := SkipUntilMagic(r); err != nil {
@@ -321,7 +321,7 @@ func TestMagicSplit(t *testing.T) {
 
 func TestTLSLikeJunk(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteTLSLikeJunk(&buf, 2, 10, 50, nil); err != nil {
+	if err := WriteTLSLikeJunk(&buf, 2, 10, 50, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	b := buf.Bytes()
@@ -344,7 +344,7 @@ func TestTLSLikeJunk(t *testing.T) {
 func TestJunkThenHandshakeWithTLSJunk(t *testing.T) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	if err := WriteTLSLikeJunk(w, 1, 20, 30, nil); err != nil {
+	if err := WriteTLSLikeJunk(w, 1, 20, 30, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	_ = w.Flush()

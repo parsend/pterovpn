@@ -12,7 +12,7 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
-func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool) (maxPad, prefixLen int, junkCount, junkMin, junkMax int, junkStyle, flushPolicy string) {
+func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool) (maxPad, prefixLen int, junkCount, junkMin, junkMax int, junkStyle, flushPolicy string, junkSplitMax int) {
 	maxPad = 32
 	if udpMaxPad {
 		if prot != nil && prot.PadS4 > 0 && prot.PadS4 <= 64 {
@@ -50,6 +50,12 @@ func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool) (maxP
 			}
 		}
 		junkStyle, flushPolicy = prot.JunkStyle, prot.FlushPolicy
+		if prot.JunkSplitMax > 0 {
+			junkSplitMax = prot.JunkSplitMax
+			if junkSplitMax > 512 {
+				junkSplitMax = 512
+			}
+		}
 	}
 	if junkCount == 0 {
 		junkCount, junkMin, junkMax = 2, 64, 512
@@ -59,8 +65,8 @@ func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool) (maxP
 }
 
 func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, prot *config.ProtectionOptions, slot int64) (maxPad int, err error) {
-	maxPad, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, true)
-	if err = protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }); err != nil {
+	maxPad, prefixLen, jc, jmin, jmax, jstyle, flush, jsplit := streamObf(prot, slot, true)
+	if err = protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }, jsplit); err != nil {
 		return 0, err
 	}
 	if !strings.EqualFold(flush, "perChunk") {
@@ -81,8 +87,8 @@ func WriteUDPChannelPreamble(w *bufio.Writer, channelID byte, token string, prot
 }
 
 func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOptions, slot int64) error {
-	_, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, false)
-	if err := protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }); err != nil {
+	_, prefixLen, jc, jmin, jmax, jstyle, flush, jsplit := streamObf(prot, slot, false)
+	if err := protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }, jsplit); err != nil {
 		return err
 	}
 	if !strings.EqualFold(flush, "perChunk") {
@@ -95,7 +101,7 @@ func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOpti
 	return protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot)
 }
 
-func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, dual bool, sel *DualPathSelector) (net.Conn, bool, bool, error) {
+func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, dual bool, sel *DualPathSelector, quicAlpn string) (net.Conn, bool, bool, error) {
 	preferTCP := false
 	if dual && quicShared != nil && UsesQUICTransport(transport, quicServer) {
 		if sel != nil {
@@ -103,10 +109,10 @@ func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot 
 		}
 	}
 	if preferTCP {
-		c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true)
+		c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true, quicAlpn)
 		return c, false, true, err
 	}
-	c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, false)
+	c, err := Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, false, quicAlpn)
 	if err != nil && dual && quicShared != nil {
 		if sel != nil {
 			sel.RecordQuicOutcome(false)
@@ -116,7 +122,7 @@ func DialTunFlow(addrs []string, dst net.IP, dstPort uint16, token string, prot 
 			clientlog.Trace("tun tcp quic dial failed, fallback tcp: %v", quicErr)
 		}
 		clientlog.Warn("vpn: tun-tcp QUIC path failed, fallback TCP: %v", quicErr)
-		c, err = Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true)
+		c, err = Dial(addrs, dst, dstPort, token, prot, transport, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicShared, true, quicAlpn)
 		return c, true, false, err
 	}
 	if err == nil && sel != nil {

@@ -108,9 +108,10 @@ final class ConnectionHandler implements Runnable {
                 featureBits,
                 cfg.quicEnabled() ? cfg.quicListenPort() : 0,
                 tcpPortHint,
-                0,
+                cfg.obfsProfileId(),
                 nonce,
-                QuicServer.getAdvertisedQuicLeafPin()
+                QuicServer.getAdvertisedQuicLeafPin(),
+                cfg.quicEnabled() ? cfg.quicAlpn() : null
             ));
         } catch (Throwable ignored) {}
     }

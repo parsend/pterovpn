@@ -96,7 +96,7 @@ func listenUDPForQUIC(network string, laddr *net.UDPAddr) (*net.UDPConn, error) 
 	return uc, nil
 }
 
-func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool) (*quic.Conn, func(), error) {
+func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, quicAlpn string) (*quic.Conn, func(), error) {
 	sniHost := serverName
 	if sniHost == "" {
 		h, _, err := net.SplitHostPort(addr)
@@ -106,13 +106,17 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 			sniHost = h
 		}
 	}
+	alpn := strings.TrimSpace(quicAlpn)
+	if alpn == "" {
+		alpn = "pteravpn"
+	}
 	pin := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(certPinSHA256), ":", ""))
 	hasPin := pin != ""
 
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		ServerName:         sniHost,
-		NextProtos:         []string{"pteravpn"},
+		NextProtos:         []string{alpn},
 		ClientSessionCache: nil,
 	}
 	if hasPin {
@@ -158,9 +162,11 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 		for _, ip := range ips {
 			ipStrs = append(ipStrs, ip.String())
 		}
-		clientlog.Trace("quic dial addr=%q sni=%q ips=%v", addr, sniHost, ipStrs)
+		clientlog.Trace("quic dial addr=%q sni=%q alpn=%q ips=%v", addr, sniHost, alpn, ipStrs)
 	}
 
+	slot := protocol.TimeSlot()
+	initPkt := uint16(1200 + int(slot%8))
 	qconf := &quic.Config{
 		EnableDatagrams:                false,
 		MaxIdleTimeout:                 15 * time.Minute,
@@ -173,7 +179,7 @@ func dialQUICConn(addr, serverName string, skipVerify bool, certPinSHA256 string
 		MaxConnectionReceiveWindow:     96 * 1024 * 1024,
 		MaxIncomingStreams:             256,
 		MaxIncomingUniStreams:          256,
-		InitialPacketSize:              1200,
+		InitialPacketSize:              initPkt,
 	}
 
 	var lastErr error
@@ -300,7 +306,7 @@ func openUDPChannelOnQUICStream(conn *quic.Conn, stream *quic.Stream, channelID 
 	return sconn, r, w, maxPad, nil
 }
 
-func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, n int, token string, prot *config.ProtectionOptions) (closeAll func(), sharedConn *quic.Conn, streams []UDPMuxQUICStream, err error) {
+func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, n int, token string, prot *config.ProtectionOptions, quicAlpn string) (closeAll func(), sharedConn *quic.Conn, streams []UDPMuxQUICStream, err error) {
 	if n < 1 || n > 4 {
 		return nil, nil, nil, fmt.Errorf("quic udp mux: bad n=%d", n)
 	}
@@ -308,7 +314,7 @@ func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVer
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs)
+	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs, quicAlpn)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -360,12 +366,12 @@ func DialUDPMuxQUIC(serverAddrs []string, quicServer, serverName string, skipVer
 	return shutdown, conn, streams, nil
 }
 
-func DialUDPChannelQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, channelID byte, token string, prot *config.ProtectionOptions) (net.Conn, *bufio.Reader, *bufio.Writer, int, error) {
+func DialUDPChannelQUIC(serverAddrs []string, quicServer, serverName string, skipVerify bool, certPinSHA256 string, rootCAs *x509.CertPool, channelID byte, token string, prot *config.ProtectionOptions, quicAlpn string) (net.Conn, *bufio.Reader, *bufio.Writer, int, error) {
 	addr, _, err := ResolveQUICDialAddr(serverAddrs, quicServer)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}
-	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs)
+	conn, closePC, err := dialQUICConn(addr, serverName, skipVerify, certPinSHA256, rootCAs, quicAlpn)
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}

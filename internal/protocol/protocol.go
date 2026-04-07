@@ -22,6 +22,9 @@ const HelloCapsHeaderLen = 11
 const HelloCapsMaxNonceLen = 32
 
 const helloCapsExtQuicLeafPin byte = 1
+const helloCapsExtQuicAlpn byte = 2
+
+const maxQuicAlpnLen = 32
 
 const maxPrefixLen = 64
 
@@ -55,6 +58,7 @@ type ServerHelloCaps struct {
 	ObfsProfileID byte
 	Nonce         []byte
 	QuicLeafPinSHA256 []byte
+	QuicAlpn string
 }
 
 type Handshake struct {
@@ -131,7 +135,37 @@ func ApplyTimeVariation(count, min, max int, slot int64) (int, int, int) {
 	return count, min, max
 }
 
-func WriteJunk(w io.Writer, count, min, max int, flushAfterChunk func()) error {
+func writeAllSplit(w io.Writer, p []byte, splitMax int) error {
+	if splitMax > 0 && splitMax < 48 {
+		splitMax = 48
+	}
+	if splitMax <= 0 || len(p) <= splitMax {
+		_, err := w.Write(p)
+		return err
+	}
+	off := 0
+	for off < len(p) {
+		seg := len(p) - off
+		if seg > splitMax {
+			n, _ := rand.Int(rand.Reader, big.NewInt(int64(splitMax-48)))
+			seg = 48 + int(n.Int64())
+			if seg > splitMax {
+				seg = splitMax
+			}
+			if seg > len(p)-off {
+				seg = len(p) - off
+			}
+		}
+		nw, err := w.Write(p[off : off+seg])
+		if err != nil {
+			return err
+		}
+		off += nw
+	}
+	return nil
+}
+
+func WriteJunk(w io.Writer, count, min, max int, flushAfterChunk func(), splitMax int) error {
 	if count <= 0 || min <= 0 || max < min {
 		return nil
 	}
@@ -146,7 +180,13 @@ func WriteJunk(w io.Writer, count, min, max int, flushAfterChunk func()) error {
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(max-min+1)))
 		sz := min + int(n.Int64())
 		_, _ = rand.Read(buf[:sz])
-		if _, err := w.Write(buf[:sz]); err != nil {
+		var err error
+		if splitMax > 0 {
+			err = writeAllSplit(w, buf[:sz], splitMax)
+		} else {
+			_, err = w.Write(buf[:sz])
+		}
+		if err != nil {
 			return err
 		}
 		if flushAfterChunk != nil {
@@ -156,18 +196,18 @@ func WriteJunk(w io.Writer, count, min, max int, flushAfterChunk func()) error {
 	return nil
 }
 
-func WriteJunkOrTLSLike(w io.Writer, count, min, max int, junkStyle, flushPolicy string, flush func()) error {
+func WriteJunkOrTLSLike(w io.Writer, count, min, max int, junkStyle, flushPolicy string, flush func(), splitMax int) error {
 	var fc func()
 	if flush != nil && strings.EqualFold(flushPolicy, "perChunk") {
 		fc = flush
 	}
 	if strings.EqualFold(junkStyle, "tls") {
-		return WriteTLSLikeJunk(w, count, min, max, fc)
+		return WriteTLSLikeJunk(w, count, min, max, fc, splitMax)
 	}
-	return WriteJunk(w, count, min, max, fc)
+	return WriteJunk(w, count, min, max, fc, splitMax)
 }
 
-func WriteTLSLikeJunk(w io.Writer, count, minLen, maxLen int, flushAfterChunk func()) error {
+func WriteTLSLikeJunk(w io.Writer, count, minLen, maxLen int, flushAfterChunk func(), splitMax int) error {
 	if count <= 0 || minLen <= 0 || maxLen < minLen {
 		return nil
 	}
@@ -182,13 +222,19 @@ func WriteTLSLikeJunk(w io.Writer, count, minLen, maxLen int, flushAfterChunk fu
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(maxLen-minLen+1)))
 		payloadLen := minLen + int(n.Int64())
 		header := [5]byte{0x16, 0x03, 0x01, byte(payloadLen >> 8), byte(payloadLen)}
-		if _, err := w.Write(header[:]); err != nil {
-			return err
-		}
 		if _, err := rand.Read(payload[:payloadLen]); err != nil {
 			return err
 		}
-		if _, err := w.Write(payload[:payloadLen]); err != nil {
+		record := make([]byte, 5+payloadLen)
+		copy(record[0:5], header[:])
+		copy(record[5:], payload[:payloadLen])
+		var err error
+		if splitMax > 0 {
+			err = writeAllSplit(w, record, splitMax)
+		} else {
+			_, err = w.Write(record)
+		}
+		if err != nil {
 			return err
 		}
 		if flushAfterChunk != nil {
@@ -225,15 +271,36 @@ func WriteServerHelloCaps(w io.Writer, caps ServerHelloCaps) error {
 	payload = append(payload, caps.ObfsProfileID)
 	payload = append(payload, byte(nonceLen))
 	payload = append(payload, caps.Nonce...)
+	if _, err := w.Write(payload); err != nil {
+		return err
+	}
 	if len(caps.QuicLeafPinSHA256) != 0 {
 		if len(caps.QuicLeafPinSHA256) != 32 {
 			return fmt.Errorf("caps quic leaf pin must be 32 bytes")
 		}
-		payload = append(payload, helloCapsExtQuicLeafPin)
-		payload = append(payload, caps.QuicLeafPinSHA256...)
+		if _, err := w.Write([]byte{helloCapsExtQuicLeafPin}); err != nil {
+			return err
+		}
+		if _, err := w.Write(caps.QuicLeafPinSHA256); err != nil {
+			return err
+		}
 	}
-	_, err := w.Write(payload)
-	return err
+	alpn := strings.TrimSpace(caps.QuicAlpn)
+	if alpn != "" {
+		if len(alpn) > maxQuicAlpnLen {
+			return errors.New("caps quic alpn too long")
+		}
+		if _, err := w.Write([]byte{helloCapsExtQuicAlpn}); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte{byte(len(alpn))}); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte(alpn)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
@@ -261,26 +328,40 @@ func ReadServerHelloCaps(r io.Reader) (ServerHelloCaps, error) {
 		ObfsProfileID: buf[9],
 		Nonce:         nonce,
 	}
-	tag := make([]byte, 1)
-	n, err := r.Read(tag)
-	if n == 0 {
+	for {
+		var tag [1]byte
+		_, err := io.ReadFull(r, tag[:])
 		if err == io.EOF {
 			return caps, nil
 		}
 		if err != nil {
 			return caps, err
 		}
-		return caps, nil
+		switch tag[0] {
+		case helloCapsExtQuicLeafPin:
+			pin := make([]byte, 32)
+			if _, err := io.ReadFull(r, pin); err != nil {
+				return ServerHelloCaps{}, err
+			}
+			caps.QuicLeafPinSHA256 = pin
+		case helloCapsExtQuicAlpn:
+			var ln [1]byte
+			if _, err := io.ReadFull(r, ln[:]); err != nil {
+				return ServerHelloCaps{}, err
+			}
+			L := int(ln[0])
+			if L < 1 || L > maxQuicAlpnLen {
+				return ServerHelloCaps{}, errors.New("caps quic alpn len")
+			}
+			alpn := make([]byte, L)
+			if _, err := io.ReadFull(r, alpn); err != nil {
+				return ServerHelloCaps{}, err
+			}
+			caps.QuicAlpn = string(alpn)
+		default:
+			return ServerHelloCaps{}, fmt.Errorf("caps unknown extension tag %02x", tag[0])
+		}
 	}
-	if tag[0] != helloCapsExtQuicLeafPin {
-		return ServerHelloCaps{}, fmt.Errorf("caps unknown extension tag %02x", tag[0])
-	}
-	pin := make([]byte, 32)
-	if _, err := io.ReadFull(r, pin); err != nil {
-		return ServerHelloCaps{}, err
-	}
-	caps.QuicLeafPinSHA256 = pin
-	return caps, nil
 }
 
 func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token string, prefixLen int) error {

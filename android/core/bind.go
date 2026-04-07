@@ -256,10 +256,17 @@ func StartTun(tunFd int, mtu int, cfgJSON string, configDir string) string {
 	}
 
 	effPin := config.EffectiveQuicCertPin(cfg, probeCaps)
+	effAlpn := config.EffectiveQuicAlpn(cfg, probeCaps)
 	dual := dualTunEnabled(probeCaps, cfg.Transport, cfg.QuicServer)
 	if cfg.DualTransport != nil && !*cfg.DualTransport {
 		dual = false
 	}
+
+	prot := config.ProtectionOptions{}
+	if cfg.Protection != nil {
+		prot = *cfg.Protection
+	}
+	prot = config.MergeProtectionWithCaps(prot, probeCaps)
 
 	s := &session{
 		done:   make(chan struct{}),
@@ -278,13 +285,14 @@ func StartTun(tunFd int, mtu int, cfgJSON string, configDir string) string {
 		MTU:               mtu,
 		Token:             cfg.Token,
 		ServerAddrs:       addrs,
-		Protection:        cfg.Protection,
+		Protection:        &prot,
 		Transport:         cfg.Transport,
 		QuicServer:        cfg.QuicServer,
 		QuicServerName:    cfg.QuicServerName,
 		QuicSkipVerify:    cfg.QuicSkipVerifyEffective(),
 		QuicCertPinSHA256: effPin,
 		QuicTLSRoots:      quicRoots,
+		QuicAlpn:          effAlpn,
 		QuicTraceLog:      cfg.QuicTraceLog,
 		DualTransport:     dual,
 		Ready: func() {
@@ -355,6 +363,13 @@ func StartProxy(listenAddr string, cfgJSON string, configDir string) string {
 	}
 
 	effPin := config.EffectiveQuicCertPin(cfg, probeCaps)
+	effAlpn := config.EffectiveQuicAlpn(cfg, probeCaps)
+
+	prot := config.ProtectionOptions{}
+	if cfg.Protection != nil {
+		prot = *cfg.Protection
+	}
+	prot = config.MergeProtectionWithCaps(prot, probeCaps)
 
 	s := &session{
 		done:       make(chan struct{}),
@@ -376,7 +391,7 @@ func StartProxy(listenAddr string, cfgJSON string, configDir string) string {
 		uninstallProtect := installSocketProtect()
 		defer uninstallProtect()
 
-		err := proxy.Run(ctx, listenAddr, addrs, cfg.Token, cfg.Protection, cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyEffective(), effPin, quicRoots)
+		err := proxy.Run(ctx, listenAddr, addrs, cfg.Token, &prot, cfg.Transport, cfg.QuicServer, cfg.QuicServerName, cfg.QuicSkipVerifyEffective(), effPin, quicRoots, effAlpn)
 		if err != nil {
 			setErr(s, err.Error())
 		}

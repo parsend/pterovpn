@@ -183,6 +183,8 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		p, _ := config.LoadProtection()
 		prot = &p
 	}
+	mergedProt := config.MergeProtectionWithCaps(*prot, probeCaps)
+	prot = &mergedProt
 	if prot != nil && prot.PreCheck && len(addrs) > 0 {
 		if !probeOK {
 			record.ErrorType = "preCheck"
@@ -218,6 +220,7 @@ func connectVPN(cfg config.Config, configName string, reconnectCount int, settin
 		quicServerName:    cfg.QuicServerName,
 		quicSkipVerify:    cfg.QuicSkipVerifyEffective(),
 		quicCertPinSHA256: config.EffectiveQuicCertPin(cfg, probeCaps),
+		quicAlpn:          config.EffectiveQuicAlpn(cfg, probeCaps),
 		quicTLSRoots:      quicRoots,
 		quicTraceLog:      cfg.QuicTraceLog,
 		tunName:           "ptera0",

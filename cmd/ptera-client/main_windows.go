@@ -135,6 +135,7 @@ func runPlatform(ctx context.Context, addrs []string, opts runOpts, onReady func
 			QuicSkipVerify:    opts.quicSkipVerify,
 			QuicCertPinSHA256: opts.quicCertPinSHA256,
 			QuicTLSRoots:      opts.quicTLSRoots,
+			QuicAlpn:          opts.quicAlpn,
 			QuicTraceLog:      opts.quicTraceLog,
 			DualTransport:     opts.dualTransport,
 			Ready:             func() { close(ready) },
@@ -288,7 +289,7 @@ func runProxy(ctx context.Context, addrs []string, opts runOpts, onReady func())
 		onReady()
 	}
 	tunnel.SetQUICTrace(opts.quicTraceLog)
-	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection, opts.transport, opts.quicServer, opts.quicServerName, opts.quicSkipVerify, opts.quicCertPinSHA256, opts.quicTLSRoots)
+	return proxy.Run(sigCtx, opts.proxyListen, addrs, opts.token, opts.protection, opts.transport, opts.quicServer, opts.quicServerName, opts.quicSkipVerify, opts.quicCertPinSHA256, opts.quicTLSRoots, opts.quicAlpn)
 }
 
 func parseCIDR(cidr string) (ip, prefixLen string, err error) {

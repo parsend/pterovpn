@@ -32,12 +32,14 @@ final class Config {
 
   private final boolean quicTraceLog;
 
+  private final int obfsProfileId;
+
   private Config(List<Integer> listenPorts, String token, int udpChannels, String publicHost, boolean debug,
                  boolean updateEnabled, String updateRepo, int updateCheckIntervalMinutes, int updateRestartExitCode,
                  String serverMode, int quicListenPort, String quicCertPath, String quicKeyPath,
                  String quicAlpn, int quicMaxStreams, int quicMaxHandshakes, int quicIdleTimeoutMs,
                  int quicHandshakeTimeoutMs, int quicTcpConnectTimeoutMs, int quicIngressRingSlots,
-                 boolean quicTraceLog) {
+                 boolean quicTraceLog, int obfsProfileId) {
     this.listenPorts = listenPorts;
     this.token = token;
     this.udpChannels = udpChannels;
@@ -59,6 +61,7 @@ final class Config {
     this.quicTcpConnectTimeoutMs = quicTcpConnectTimeoutMs;
     this.quicIngressRingSlots = quicIngressRingSlots;
     this.quicTraceLog = quicTraceLog;
+    this.obfsProfileId = obfsProfileId;
   }
 
   String serverMode() { return serverMode; }
@@ -73,6 +76,7 @@ final class Config {
   int quicTcpConnectTimeoutMs() { return quicTcpConnectTimeoutMs; }
   int quicIngressRingSlots() { return quicIngressRingSlots; }
   boolean quicTraceLog() { return quicTraceLog; }
+  int obfsProfileId() { return obfsProfileId; }
   boolean tcpEnabled() { return !"quic-only".equals(serverMode); }
   boolean quicEnabled() { return !"tcp-only".equals(serverMode); }
 
@@ -141,6 +145,7 @@ final class Config {
     int quicTcpConnectTimeoutMs = Math.max(1_000, parseInt(p.getProperty("quicTcpConnectTimeoutMs"), 10_000));
     int quicIngressRingSlots = Math.max(64, parseInt(p.getProperty("quicIngressRingSlots"), 4096));
     boolean quicTraceLog = "true".equalsIgnoreCase(p.getProperty("quicTraceLog", "").trim());
+    int obfsProfileId = Math.max(0, Math.min(255, parseInt(p.getProperty("obfsProfileId"), 0)));
     if (serverMode.equals("quic-only") || serverMode.equals("both")) {
       if (quicListenPort < 1 || quicListenPort > 65535) throw new IOException("bad quicListenPort");
       if (quicCertPath == null || quicCertPath.isBlank()) throw new IOException("quicCertPath is required");
@@ -150,7 +155,7 @@ final class Config {
         updateEnabled, updateRepo, updateCheckIntervalMinutes, updateRestartExitCode,
         serverMode, quicListenPort, quicCertPath, quicKeyPath, quicAlpn, quicMaxStreams, quicMaxHandshakes, quicIdleTimeoutMs,
         quicHandshakeTimeoutMs, quicTcpConnectTimeoutMs, quicIngressRingSlots,
-        quicTraceLog);
+        quicTraceLog, obfsProfileId);
   }
 
   private static String firstNonEmpty(String a, String b) {

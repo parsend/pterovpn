@@ -16,9 +16,9 @@ import (
 	"github.com/unitdevgcc/pterovpn/internal/sockprotect"
 )
 
-func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, tunPreferTCP bool) (net.Conn, error) {
+func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicShared *QUICConn, tunPreferTCP bool, quicAlpn string) (net.Conn, error) {
 	if !tunPreferTCP && UsesQUICTransport(transport, quicServer) {
-		return dialQUIC(serverAddrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, targetIP, targetPort, token, prot, quicShared)
+		return dialQUIC(serverAddrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, targetIP, targetPort, token, prot, quicShared, quicAlpn)
 	}
 	addr := pickAddr(serverAddrs, targetIP, targetPort)
 	c, err := dialServer(addr, token)
@@ -97,7 +97,7 @@ func dialServer(addr, token string) (net.Conn, error) {
 	return obfuscate.WrapConn(c, token), nil
 }
 
-func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, quicShared *QUICConn) (net.Conn, error) {
+func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, targetIP net.IP, targetPort uint16, token string, prot *config.ProtectionOptions, quicShared *QUICConn, quicAlpn string) (net.Conn, error) {
 	ownsConn := quicShared == nil
 	var conn *QUICConn
 	var err error
@@ -107,7 +107,7 @@ func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipV
 		if err != nil {
 			return nil, err
 		}
-		conn, closePC, err = dialQUICConn(addr, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots)
+		conn, closePC, err = dialQUICConn(addr, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, quicAlpn)
 		if err != nil {
 			return nil, err
 		}

@@ -16,6 +16,7 @@ data class ProtectionOptions(
     val magicSplit: String? = null,
     val junkStyle: String? = null,
     val flushPolicy: String? = null,
+    val junkSplitMax: Int = 0,
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
@@ -31,6 +32,7 @@ data class ProtectionOptions(
         magicSplit?.let { j.put("magicSplit", it) }
         junkStyle?.let { j.put("junkStyle", it) }
         flushPolicy?.let { j.put("flushPolicy", it) }
+        if (junkSplitMax != 0) j.put("junkSplitMax", junkSplitMax)
         return j
     }
 
@@ -48,6 +50,7 @@ data class ProtectionOptions(
             magicSplit = j.optNullableString("magicSplit"),
             junkStyle = j.optNullableString("junkStyle"),
             flushPolicy = j.optNullableString("flushPolicy"),
+            junkSplitMax = j.optInt("junkSplitMax", 0),
         )
     }
 }

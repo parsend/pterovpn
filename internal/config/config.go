@@ -19,6 +19,7 @@ type Config struct {
 	QuicSkipVerify    *bool  `json:"quicSkipVerify,omitempty"`
 	QuicCertPinSHA256 string `json:"quicCertPinSHA256,omitempty"`
 	QuicCaCert        string `json:"quicCaCert,omitempty"`
+	QuicAlpn          string `json:"quicAlpn,omitempty"`
 
 	QuicTraceLog bool               `json:"quicTraceLog,omitempty"`
 	DualTransport *bool `json:"dualTransport,omitempty"`
@@ -41,6 +42,7 @@ type ProtectionOptions struct {
 	MagicSplit  string `json:"magicSplit,omitempty"`
 	JunkStyle   string `json:"junkStyle,omitempty"`
 	FlushPolicy string `json:"flushPolicy,omitempty"`
+	JunkSplitMax int `json:"junkSplitMax,omitempty"`
 }
 
 func Dir() (string, error) {

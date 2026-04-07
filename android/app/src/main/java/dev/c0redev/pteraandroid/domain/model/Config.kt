@@ -11,6 +11,7 @@ data class Config(
     val quicSkipVerify: Boolean? = null,
     val quicCertPinSHA256: String? = null,
     val quicCaCert: String? = null,
+    val quicAlpn: String? = null,
     val quicTraceLog: Boolean? = null,
     val routes: String? = null,
     val exclude: String? = null,
@@ -75,6 +76,7 @@ data class Config(
         quicSkipVerify?.let { j.put("quicSkipVerify", it) }
         quicCertPinSHA256?.takeIf { it.isNotBlank() }?.let { j.put("quicCertPinSHA256", it) }
         quicCaCert?.takeIf { it.isNotBlank() }?.let { j.put("quicCaCert", it) }
+        quicAlpn?.takeIf { it.isNotBlank() }?.let { j.put("quicAlpn", it) }
         quicTraceLog?.let { j.put("quicTraceLog", it) }
         routes?.let { j.put("routes", it) }
         exclude?.let { j.put("exclude", it) }
@@ -122,6 +124,7 @@ data class Config(
                 quicSkipVerify = if (j.has("quicSkipVerify")) j.optBoolean("quicSkipVerify") else null,
                 quicCertPinSHA256 = j.optString("quicCertPinSHA256", "").takeIf { it.isNotBlank() },
                 quicCaCert = j.optString("quicCaCert", "").takeIf { it.isNotBlank() },
+                quicAlpn = j.optString("quicAlpn", "").takeIf { it.isNotBlank() },
                 quicTraceLog = if (j.has("quicTraceLog")) j.optBoolean("quicTraceLog") else null,
                 routes = j.optString("routes", "").takeIf { it.isNotBlank() },
                 exclude = j.optString("exclude", "").takeIf { it.isNotBlank() },

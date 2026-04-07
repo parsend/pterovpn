@@ -44,6 +44,7 @@ type Options struct {
 	QuicSkipVerify    bool
 	QuicCertPinSHA256 string
 	QuicTLSRoots      *x509.CertPool
+	QuicAlpn          string
 	QuicTraceLog      bool
 	DualTransport     bool
 
@@ -76,7 +77,7 @@ func Run(ctx context.Context, opt Options) error {
 		}
 	}
 
-	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection, opt.Transport, opt.QuicServer, opt.QuicServerName, opt.QuicSkipVerify, opt.QuicCertPinSHA256, opt.QuicTLSRoots)
+	udpMux, err := newUDPMux(opt.ServerAddrs, opt.Token, 4, opt.Protection, opt.Transport, opt.QuicServer, opt.QuicServerName, opt.QuicSkipVerify, opt.QuicCertPinSHA256, opt.QuicTLSRoots, opt.QuicAlpn)
 	if err != nil {
 		return err
 	}
@@ -158,12 +159,12 @@ func (m *udpMux) SharedQUICConn() *tunnel.QUICConn {
 	return m.quicConn
 }
 
-func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool) (*udpMux, error) {
+func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool, quicAlpn string) (*udpMux, error) {
 	m := &udpMux{
 		chans: make([]*udpChan, n),
 	}
 	if tunnel.UsesQUICTransport(transport, quicServer) {
-		closeConn, sharedConn, streams, err := tunnel.DialUDPMuxQUIC(addrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, n, token, prot)
+		closeConn, sharedConn, streams, err := tunnel.DialUDPMuxQUIC(addrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, n, token, prot, quicAlpn)
 		if err != nil {
 			clientlog.Drop("vpn: QUIC UDP mux failed: %v", err)
 			return nil, err
@@ -393,7 +394,7 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	slot := protocol.TimeSlot()
 	var err error
 	var fellBackTCP, tcpOnly bool
-	sconn, fellBackTCP, tcpOnly, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport, h.dualSel)
+	sconn, fellBackTCP, tcpOnly, err = tunnel.DialTunFlow(h.opt.ServerAddrs, dstIP, dstPort, h.opt.Token, h.opt.Protection, h.opt.Transport, h.opt.QuicServer, h.opt.QuicServerName, h.opt.QuicSkipVerify, h.opt.QuicCertPinSHA256, h.opt.QuicTLSRoots, shared, h.opt.DualTransport, h.dualSel, h.opt.QuicAlpn)
 	if h.opt.DualTransport && shared != nil {
 		if fellBackTCP || tcpOnly {
 			tag = "TCP"
