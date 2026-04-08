@@ -33,6 +33,29 @@ func TestPickAddrSingle(t *testing.T) {
 	}
 }
 
+func TestPickAddrOrderStartsWithPickedAddrAndContainsAll(t *testing.T) {
+	addrs := []string{"a:1", "b:2", "c:3", "d:4"}
+	ip := net.ParseIP("10.1.2.3")
+	p := uint16(443)
+	first := pickAddr(addrs, ip, p)
+	order := pickAddrOrder(addrs, ip, p)
+	if len(order) != len(addrs) {
+		t.Fatalf("order len=%d want %d", len(order), len(addrs))
+	}
+	if order[0] != first {
+		t.Fatalf("order[0]=%s want %s", order[0], first)
+	}
+	seen := map[string]int{}
+	for _, a := range order {
+		seen[a]++
+	}
+	for _, a := range addrs {
+		if seen[a] != 1 {
+			t.Fatalf("addr %s count=%d want 1", a, seen[a])
+		}
+	}
+}
+
 func TestResolveQUICDialAddr(t *testing.T) {
 	a, d, err := ResolveQUICDialAddr([]string{"10.0.0.1:26771"}, "")
 	if err != nil || !d || a != "10.0.0.1:"+DefaultQUICPort {

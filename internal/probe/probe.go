@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/unitdevgcc/pterovpn/internal/obfuscate"
 	"github.com/unitdevgcc/pterovpn/internal/protocol"
 )
 
@@ -45,7 +44,7 @@ func ProbePterovpnWithCaps(addr string, wireToken string, timeout time.Duration)
 		timeout = defaultProbeTimeout
 	}
 	if strings.TrimSpace(wireToken) == "" {
-		return false, false, nil, errors.New("probe: server token required for XOR stream")
+		return false, false, nil, errors.New("probe: server token required")
 	}
 	badToken := "probe-bad-token"
 
@@ -55,13 +54,8 @@ func ProbePterovpnWithCaps(addr string, wireToken string, timeout time.Duration)
 	}
 	defer c.Close()
 
-	wrapped := obfuscate.WrapConn(c, wireToken)
-	w := bufio.NewWriter(wrapped)
+	w := bufio.NewWriter(c)
 
-	slot := protocol.TimeSlot()
-	junkCount, junkMin, junkMax := 2, 64, 512
-	junkCount, junkMin, junkMax = protocol.ApplyTimeVariation(junkCount, junkMin, junkMax, slot)
-	_ = protocol.WriteJunkOrTLSLike(w, junkCount, junkMin, junkMax, "", "", func() { _ = w.Flush() })
 	if err := protocol.WriteHandshake(w, protocol.RoleUDP(), 0, badToken); err != nil {
 		log.Printf("probe: handshake write: %v", err)
 		return false, false, nil, err

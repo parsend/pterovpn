@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/x509"
+	"errors"
 	"net"
 	"strings"
 	"syscall"
@@ -20,24 +21,40 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 	if !tunPreferTCP && UsesQUICTransport(transport, quicServer) {
 		return dialQUIC(serverAddrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, targetIP, targetPort, token, prot, quicShared)
 	}
-	addr := pickAddr(serverAddrs, targetIP, targetPort)
-	c, err := dialServer(addr, token)
-	if err != nil {
-		return nil, err
+	if len(serverAddrs) == 0 {
+		return nil, errors.New("server addrs empty")
 	}
-	slot := protocol.TimeSlot()
-	bufSize := protocol.BufSizeForConn(slot)
-	r := bufio.NewReaderSize(c, bufSize)
-	w := bufio.NewWriterSize(c, bufSize)
-	if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
-		c.Close()
-		return nil, err
+	order := pickAddrOrder(serverAddrs, targetIP, targetPort)
+	var lastErr error
+	for i, addr := range order {
+		c, err := dialServer(addr, token)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		slot := protocol.TimeSlot()
+		bufSize := protocol.BufSizeForConn(slot)
+		r := bufio.NewReaderSize(c, bufSize)
+		w := bufio.NewWriterSize(c, bufSize)
+		if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
+			_ = c.Close()
+			lastErr = err
+			continue
+		}
+		if err := protocol.WriteTcpConnect(w, targetIP, targetPort); err != nil {
+			_ = c.Close()
+			lastErr = err
+			continue
+		}
+		if i > 0 {
+			clientlog.Warn("tun tcp connected via fallback addr=%s attempt=%d", addr, i+1)
+		}
+		return &tunnelConn{Conn: c, r: r}, nil
 	}
-	if err := protocol.WriteTcpConnect(w, targetIP, targetPort); err != nil {
-		c.Close()
-		return nil, err
+	if lastErr == nil {
+		lastErr = errors.New("tcp dial failed")
 	}
-	return &tunnelConn{Conn: c, r: r}, nil
+	return nil, lastErr
 }
 
 func UsesQUICTransport(transport, quicServer string) bool {
@@ -162,4 +179,23 @@ func pickAddr(addrs []string, ip net.IP, port uint16) string {
 	}
 	h += uint(port)
 	return addrs[int(h)%len(addrs)]
+}
+
+func pickAddrOrder(addrs []string, ip net.IP, port uint16) []string {
+	if len(addrs) <= 1 {
+		return append([]string(nil), addrs...)
+	}
+	first := pickAddr(addrs, ip, port)
+	out := make([]string, 0, len(addrs))
+	start := 0
+	for i, a := range addrs {
+		if a == first {
+			start = i
+			break
+		}
+	}
+	for i := 0; i < len(addrs); i++ {
+		out = append(out, addrs[(start+i)%len(addrs)])
+	}
+	return out
 }

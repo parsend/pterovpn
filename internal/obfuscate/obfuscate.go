@@ -59,5 +59,5 @@ func xorBytes(b, key []byte, pos *int) {
 }
 
 func WrapConn(conn net.Conn, token string) net.Conn {
-	return &xorConn{Conn: conn, key: keyFromToken(token)}
+	return conn
 }

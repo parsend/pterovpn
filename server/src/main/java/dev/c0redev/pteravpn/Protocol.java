@@ -7,17 +7,16 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Optional;
 
 final class Protocol {
-  static final byte[] MAGIC = "PTVPN".getBytes(StandardCharsets.UTF_8);
   static final byte VERSION = 1;
   static final byte ROLE_UDP = 1;
   static final byte ROLE_TCP = 2;
   static final byte MSG_UDP = 1;
   static final byte ADDR_V4 = 4;
   static final byte ADDR_V6 = 6;
-  static final int MAGIC_LEN = 5;
   static final int MAX_TOKEN = 4096;
   static final int MAX_FRAME = 64 * 1024 + 64;
   static final int MAX_PAD = 32;
@@ -31,7 +30,6 @@ final class Protocol {
   static record HandshakeResult(Handshake handshake, Optional<ClientOptions> opts) {}
 
   static HandshakeResult readHandshake(InputStream in) throws IOException {
-    skipUntilMagic(in);
     Handshake hs = readHandshakeBody(in);
     Optional<ClientOptions> opts = readClientOptions(in);
     return new HandshakeResult(hs, opts);
@@ -45,26 +43,6 @@ final class Protocol {
     Optional<ClientOptions> parsed = ClientOptions.parse(new String(buf, StandardCharsets.UTF_8));
     if (parsed.isEmpty()) throw new IOException("bad client options json");
     return parsed;
-  }
-
-  static void skipUntilMagic(InputStream in) throws IOException {
-    byte[] buf = new byte[5];
-    int n = 0;
-    while (true) {
-      int b = in.read();
-      if (b == -1) throw new EOFException();
-      System.arraycopy(buf, 1, buf, 0, 4);
-      buf[4] = (byte) b;
-      n++;
-      if (n >= 5
-          && buf[0] == MAGIC[0]
-          && buf[1] == MAGIC[1]
-          && buf[2] == MAGIC[2]
-          && buf[3] == MAGIC[3]
-          && buf[4] == MAGIC[4]) {
-        return;
-      }
-    }
   }
 
   static Handshake readHandshakeBody(InputStream in) throws IOException {
@@ -261,23 +239,77 @@ final class Protocol {
       byte[] nonce,
       byte[] quicLeafPinSha256) {}
 
-  record ClientOptions(int padS4) {
+  record ClientOptions(
+      int padS4,
+      int capsVersion,
+      int transportMask,
+      int featureBits,
+      long clientTsSec,
+      byte[] clientNonce
+  ) {
     static Optional<ClientOptions> parse(String json) {
       try {
         int padS4 = 32;
-        if (json.contains("\"padS4\"")) {
-          int i = json.indexOf("\"padS4\"");
-          int start = json.indexOf(":", i) + 1;
-          int end = json.indexOf(",", start);
-          if (end < 0) end = json.indexOf("}", start);
-          if (end < 0) end = json.length();
-          padS4 = Integer.parseInt(json.substring(start, end).trim());
+        String sPad = readJsonScalar(json, "padS4");
+        if (sPad != null) {
+          padS4 = Integer.parseInt(sPad);
           if (padS4 < 0 || padS4 > 64) padS4 = 32;
         }
-        return Optional.of(new ClientOptions(padS4));
+        int capsVersion = parseIntOr(readJsonScalar(json, "capsVersion"), 0);
+        int transportMask = parseIntOr(readJsonScalar(json, "transportMask"), 0);
+        int featureBits = parseIntOr(readJsonScalar(json, "featureBits"), 0);
+        long clientTsSec = parseLongOr(readJsonScalar(json, "clientTsSec"), 0L);
+        byte[] clientNonce = parseNonce(readJsonScalar(json, "clientNonce"));
+        return Optional.of(new ClientOptions(padS4, capsVersion, transportMask, featureBits, clientTsSec, clientNonce));
       } catch (Exception e) {
         return Optional.empty();
       }
+    }
+
+    private static String readJsonScalar(String json, String key) {
+      String k = "\"" + key + "\"";
+      int i = json.indexOf(k);
+      if (i < 0) return null;
+      int colon = json.indexOf(":", i + k.length());
+      if (colon < 0) return null;
+      int start = colon + 1;
+      while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+      if (start >= json.length()) return null;
+      if (json.charAt(start) == '"') {
+        int end = json.indexOf("\"", start + 1);
+        if (end < 0) return null;
+        return json.substring(start + 1, end);
+      }
+      int end = start;
+      while (end < json.length() && json.charAt(end) != ',' && json.charAt(end) != '}') end++;
+      return json.substring(start, end).trim();
+    }
+
+    private static int parseIntOr(String s, int fallback) {
+      if (s == null || s.isBlank()) return fallback;
+      return Integer.parseInt(s);
+    }
+
+    private static long parseLongOr(String s, long fallback) {
+      if (s == null || s.isBlank()) return fallback;
+      return Long.parseLong(s);
+    }
+
+    private static byte[] parseNonce(String s) {
+      if (s == null || s.isBlank()) return null;
+      try {
+        return Base64.getUrlDecoder().decode(s);
+      } catch (Exception ignored) {}
+      try {
+        int n = s.length();
+        if ((n & 1) != 0) return null;
+        byte[] out = new byte[n / 2];
+        for (int i = 0; i < n; i += 2) {
+          out[i / 2] = (byte) Integer.parseInt(s.substring(i, i + 2), 16);
+        }
+        return out;
+      } catch (Exception ignored) {}
+      return null;
     }
   }
 }

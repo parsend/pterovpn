@@ -25,8 +25,6 @@ const helloCapsExtQuicLeafPin byte = 1
 
 const maxPrefixLen = 64
 
-var magic = []byte{'P', 'T', 'V', 'P', 'N'}
-
 const (
 	version = 1
 
@@ -64,19 +62,7 @@ type Handshake struct {
 }
 
 func SkipUntilMagic(r io.Reader) error {
-	var buf [5]byte
-	n := 0
-	for {
-		b, err := readByte(r)
-		if err != nil {
-			return err
-		}
-		buf[0], buf[1], buf[2], buf[3], buf[4] = buf[1], buf[2], buf[3], buf[4], b
-		n++
-		if n >= 5 && buf[0] == magic[0] && buf[1] == magic[1] && buf[2] == magic[2] && buf[3] == magic[3] && buf[4] == magic[4] {
-			return nil
-		}
-	}
+	return nil
 }
 
 func readByte(r io.Reader) (byte, error) {
@@ -288,7 +274,12 @@ func WriteHandshakeWithPrefix(w *bufio.Writer, role byte, channelID byte, token 
 }
 
 type handshakeOpts struct {
-	MagicSplit string `json:"magicSplit,omitempty"`
+	MagicSplit    string `json:"magicSplit,omitempty"`
+	CapsVersion   int    `json:"capsVersion,omitempty"`
+	TransportMask int    `json:"transportMask,omitempty"`
+	FeatureBits   int    `json:"featureBits,omitempty"`
+	ClientNonce   string `json:"clientNonce,omitempty"`
+	ClientTsSec   int64  `json:"clientTsSec,omitempty"`
 }
 
 func parseMagicSplit(s string) []int {
@@ -340,31 +331,7 @@ func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID b
 	if len(optsJSON) > 0 && len(optsJSON) <= maxOptsLen {
 		_ = json.Unmarshal(optsJSON, &opts)
 	}
-	splits := parseMagicSplit(opts.MagicSplit)
-	if len(splits) > 0 {
-		off := 0
-		for _, n := range splits {
-			if off+n > len(magic) {
-				break
-			}
-			if _, err := w.Write(magic[off : off+n]); err != nil {
-				return err
-			}
-			if err := w.Flush(); err != nil {
-				return err
-			}
-			off += n
-		}
-		if off < len(magic) {
-			if _, err := w.Write(magic[off:]); err != nil {
-				return err
-			}
-		}
-	} else {
-		if _, err := w.Write(magic); err != nil {
-			return err
-		}
-	}
+	_ = parseMagicSplit(opts.MagicSplit)
 	if err := w.WriteByte(version); err != nil {
 		return err
 	}
@@ -401,15 +368,6 @@ func WriteHandshakeWithPrefixAndOptsSlot(w *bufio.Writer, role byte, channelID b
 }
 
 func ReadHandshake(r *bufio.Reader) (Handshake, error) {
-	got := make([]byte, len(magic))
-	if _, err := io.ReadFull(r, got); err != nil {
-		return Handshake{}, err
-	}
-	for i := range magic {
-		if got[i] != magic[i] {
-			return Handshake{}, errors.New("bad magic")
-		}
-	}
 	hs, err := readHandshakeBody(r)
 	if err != nil {
 		return Handshake{}, err
@@ -421,17 +379,7 @@ func ReadHandshake(r *bufio.Reader) (Handshake, error) {
 }
 
 func ReadHandshakeAfterSkip(r *bufio.Reader) (Handshake, error) {
-	if err := SkipUntilMagic(r); err != nil {
-		return Handshake{}, err
-	}
-	hs, err := readHandshakeBody(r)
-	if err != nil {
-		return Handshake{}, err
-	}
-	if err := discardHandshakeOpts(r); err != nil {
-		return Handshake{}, err
-	}
-	return hs, nil
+	return ReadHandshake(r)
 }
 
 func discardHandshakeOpts(r *bufio.Reader) error {

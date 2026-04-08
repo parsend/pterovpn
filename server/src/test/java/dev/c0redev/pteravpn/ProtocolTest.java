@@ -25,7 +25,6 @@ class ProtocolTest {
   void readHandshakeTcp() throws IOException {
     byte[] tok = "secret".getBytes();
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
-    buf.write("PTVPN".getBytes());
     buf.write(Protocol.VERSION);
     buf.write(Protocol.ROLE_TCP);
     buf.write(u16(tok.length));
@@ -43,7 +42,6 @@ class ProtocolTest {
     byte[] tok = "secret".getBytes();
     String opts = "{\"padS4\":40}";
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
-    buf.write("PTVPN".getBytes());
     buf.write(Protocol.VERSION);
     buf.write(Protocol.ROLE_TCP);
     buf.write(u16(tok.length));
@@ -66,7 +64,6 @@ class ProtocolTest {
   void readHandshakeUdp() throws IOException {
     byte[] tok = "x".getBytes();
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
-    buf.write("PTVPN".getBytes());
     buf.write(Protocol.VERSION);
     buf.write(Protocol.ROLE_UDP);
     buf.write(u16(tok.length));
@@ -80,8 +77,8 @@ class ProtocolTest {
   }
 
   @Test
-  void readHandshakeBadMagic() {
-    var in = new ByteArrayInputStream("XXXXX".getBytes());
+  void readHandshakeBadVersion() {
+    var in = new ByteArrayInputStream(new byte[] {99, Protocol.ROLE_TCP, 0, 0, 0, 0});
     assertThrows(IOException.class, () -> Protocol.readHandshake(in));
   }
 
@@ -115,17 +112,14 @@ class ProtocolTest {
     byte[] pad = new byte[]{0x00, 0x01, 0x02, 0x03};
     ByteArrayOutputStream buf = new ByteArrayOutputStream();
     buf.write(pad);
-    buf.write("PTVPN".getBytes());
     buf.write(Protocol.VERSION);
     buf.write(Protocol.ROLE_UDP);
     buf.write(u16(1));
     buf.write('x');
     buf.write(0);
     buf.write(u16(0));
-    var hr = Protocol.readHandshake(new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray())));
-    var hs = hr.handshake();
-    assertEquals(Protocol.ROLE_UDP, hs.role());
-    assertEquals("x", hs.token());
+    var in = new BufferedInputStream(new ByteArrayInputStream(buf.toByteArray()));
+    assertThrows(IOException.class, () -> Protocol.readHandshake(in));
   }
 
   @Test

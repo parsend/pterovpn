@@ -429,11 +429,10 @@ func (h *handler) handleTCP(tc adapter.TCPConn) {
 	r = bufio.NewReaderSize(sconn, protocol.BufSizeForConn(slot))
 	defer sconn.Close()
 
-	deadline := time.Now().Add(30 * time.Minute)
-	_ = tc.SetReadDeadline(deadline)
-	_ = tc.SetWriteDeadline(deadline)
-	_ = sconn.SetReadDeadline(deadline)
-	_ = sconn.SetWriteDeadline(deadline)
+	_ = tc.SetReadDeadline(time.Time{})
+	_ = tc.SetWriteDeadline(time.Time{})
+	_ = sconn.SetReadDeadline(time.Time{})
+	_ = sconn.SetWriteDeadline(time.Time{})
 
 	copyBufSize := protocol.CopyBufSize(slot)
 	done := make(chan struct{}, 2)

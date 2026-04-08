@@ -13,11 +13,11 @@ func TestWireCompatHandshake(t *testing.T) {
 	WriteHandshake(w, RoleTCP(), 0, "tok")
 	w.Flush()
 	b := buf.Bytes()
-	if len(b) < 10 || string(b[:5]) != "PTVPN" {
-		t.Fatalf("bad handshake header: %x", b[:5])
+	if len(b) < 5 {
+		t.Fatalf("bad handshake header len=%d", len(b))
 	}
-	if b[5] != 1 || b[6] != RoleTCP() {
-		t.Errorf("version/role %d %d", b[5], b[6])
+	if b[0] != 1 || b[1] != RoleTCP() {
+		t.Errorf("version/role %d %d", b[0], b[1])
 	}
 	if len(b) < 2 || b[len(b)-2] != 0 || b[len(b)-1] != 0 {
 		t.Errorf("want trailing big-endian u16(0) opts len, got len=%d", len(b))

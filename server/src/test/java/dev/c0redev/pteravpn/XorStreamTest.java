@@ -21,7 +21,7 @@ class XorStreamTest {
       w.write(data);
     }
     var out = buf.toByteArray();
-    assertFalse(java.util.Arrays.equals(plain, out));
+    assertArrayEquals(plain, out);
 
     var xor2 = new XorStream(key);
     var in = xor2.wrapInput(new ByteArrayInputStream(out));

@@ -33,17 +33,17 @@ func TestHandshakeRoundtrip(t *testing.T) {
 	}
 }
 
-func TestHandshakeBadMagic(t *testing.T) {
-	b := []byte{'X', 'X', 'X', 'X', 'X', 1, RoleTCP(), 0, 1, 'x'}
+func TestHandshakeShort(t *testing.T) {
+	b := []byte{}
 	r := bufio.NewReader(bytes.NewReader(b))
 	_, err := ReadHandshake(r)
-	if err == nil || err.Error() != "bad magic" {
-		t.Errorf("want bad magic, got %v", err)
+	if err == nil {
+		t.Errorf("want error, got %v", err)
 	}
 }
 
 func TestHandshakeBadVersion(t *testing.T) {
-	b := append([]byte("PTVPN"), 99, RoleTCP(), 0, 1, 'x')
+	b := []byte{99, RoleTCP(), 0, 1, 'x'}
 	r := bufio.NewReader(bytes.NewReader(b))
 	_, err := ReadHandshake(r)
 	if err == nil || err.Error() != "bad version" {
@@ -192,24 +192,15 @@ func TestJunkThenHandshake(t *testing.T) {
 	_ = WriteJunk(w, 2, 64, 256, nil)
 	_ = WriteHandshake(w, RoleTCP(), 0, "t")
 	r := bufio.NewReader(&buf)
-	if err := SkipUntilMagic(r); err != nil {
-		t.Fatal(err)
-	}
-	hs, err := readHandshakeBody(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := discardHandshakeOpts(r); err != nil {
-		t.Fatal(err)
-	}
-	if hs.Token != "t" || hs.Role != RoleTCP() {
-		t.Errorf("got %+v", hs)
+	_, err := ReadHandshake(r)
+	if err == nil {
+		t.Fatal("want error without explicit sync marker")
 	}
 }
 
 func TestSkipUntilMagic(t *testing.T) {
 	pad := []byte{0x00, 0x01, 0x02, 0x03}
-	body := append(magic, version, RoleTCP(), 0, 1, 'x')
+	body := []byte{version, RoleTCP(), 0, 1, 'x'}
 	r := bytes.NewReader(append(pad, body...))
 	if err := SkipUntilMagic(r); err != nil {
 		t.Fatal(err)
@@ -218,7 +209,7 @@ func TestSkipUntilMagic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ver != version {
+	if ver != pad[0] {
 		t.Errorf("ver=%d", ver)
 	}
 }
@@ -226,18 +217,12 @@ func TestSkipUntilMagic(t *testing.T) {
 func TestWriteHandshakeWithPrefix(t *testing.T) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	if err := WriteHandshakeWithPrefix(w, RoleUDP(), 0, "x", 16); err != nil {
+	if err := WriteHandshakeWithPrefix(w, RoleUDP(), 0, "x", 0); err != nil {
 		t.Fatal(err)
 	}
 	r := bufio.NewReader(&buf)
-	if err := SkipUntilMagic(r); err != nil {
-		t.Fatal(err)
-	}
-	hs, err := readHandshakeBody(r)
+	hs, err := ReadHandshake(r)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := discardHandshakeOpts(r); err != nil {
 		t.Fatal(err)
 	}
 	if hs.Token != "x" || hs.Role != RoleUDP() {
@@ -304,9 +289,6 @@ func TestMagicSplit(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := bufio.NewReader(&buf)
-	if err := SkipUntilMagic(r); err != nil {
-		t.Fatal(err)
-	}
 	hs, err := readHandshakeBody(r)
 	if err != nil {
 		t.Fatal(err)
@@ -352,17 +334,8 @@ func TestJunkThenHandshakeWithTLSJunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := bufio.NewReader(&buf)
-	if err := SkipUntilMagic(r); err != nil {
-		t.Fatal(err)
-	}
-	hs, err := readHandshakeBody(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := discardHandshakeOpts(r); err != nil {
-		t.Fatal(err)
-	}
-	if hs.Token != "tls" {
-		t.Errorf("got token %q", hs.Token)
+	_, err := ReadHandshake(r)
+	if err == nil {
+		t.Fatal("want error without explicit sync marker")
 	}
 }

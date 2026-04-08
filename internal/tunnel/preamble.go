@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/unitdevgcc/pterovpn/internal/clientlog"
 	"github.com/unitdevgcc/pterovpn/internal/config"
@@ -141,15 +143,32 @@ func applyMixJunkVariation(count, min, max int, mix []byte) (int, int, int) {
 }
 
 func handshakeOptsJSON(prot *config.ProtectionOptions, seed []byte, slot int64, negotiatedUDPMaxPad int, magicSplit string, udpChannel bool) []byte {
+	mask := protocol.TransportTCP
+	if udpChannel {
+		mask = protocol.TransportTCP
+	}
+	meta := map[string]any{
+		"capsVersion":   protocol.CapsVersion,
+		"transportMask": mask,
+		"featureBits":   0,
+		"clientTsSec":   time.Now().Unix(),
+		"clientNonce":   fmt.Sprintf("%x", seed),
+	}
 	enc := base64.RawURLEncoding.EncodeToString(seed)
 	if prot != nil {
-		wire := *prot
-		wire.ObfSeed = enc
-		if udpChannel && negotiatedUDPMaxPad >= 0 {
-			wire.PadS4 = negotiatedUDPMaxPad
+		wire := map[string]any{}
+		b0, _ := json.Marshal(*prot)
+		_ = json.Unmarshal(b0, &wire)
+		wire["obfSeed"] = enc
+		for k, v := range meta {
+			wire[k] = v
 		}
-		if strings.TrimSpace(wire.MagicSplit) == "" && magicSplit != "" {
-			wire.MagicSplit = magicSplit
+		if udpChannel && negotiatedUDPMaxPad >= 0 {
+			wire["padS4"] = negotiatedUDPMaxPad
+		}
+		v, _ := wire["magicSplit"].(string)
+		if strings.TrimSpace(v) == "" && magicSplit != "" {
+			wire["magicSplit"] = magicSplit
 		}
 		b, err := json.Marshal(wire)
 		if err != nil {
@@ -158,11 +177,24 @@ func handshakeOptsJSON(prot *config.ProtectionOptions, seed []byte, slot int64, 
 		return b
 	}
 	type wireMinimal struct {
-		ObfSeed    string `json:"obfSeed"`
-		PadS4      int    `json:"padS4,omitempty"`
-		MagicSplit string `json:"magicSplit,omitempty"`
+		ObfSeed       string `json:"obfSeed"`
+		PadS4         int    `json:"padS4,omitempty"`
+		MagicSplit    string `json:"magicSplit,omitempty"`
+		CapsVersion   int    `json:"capsVersion,omitempty"`
+		TransportMask int    `json:"transportMask,omitempty"`
+		FeatureBits   int    `json:"featureBits,omitempty"`
+		ClientTsSec   int64  `json:"clientTsSec,omitempty"`
+		ClientNonce   string `json:"clientNonce,omitempty"`
 	}
-	wm := wireMinimal{ObfSeed: enc, MagicSplit: magicSplit}
+	wm := wireMinimal{
+		ObfSeed:       enc,
+		MagicSplit:    magicSplit,
+		CapsVersion:   protocol.CapsVersion,
+		TransportMask: mask,
+		FeatureBits:   0,
+		ClientTsSec:   time.Now().Unix(),
+		ClientNonce:   fmt.Sprintf("%x", seed),
+	}
 	if udpChannel && negotiatedUDPMaxPad > 0 {
 		wm.PadS4 = negotiatedUDPMaxPad
 	}
@@ -184,12 +216,7 @@ func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, 
 	}
 	ms = pickMagicSplit(seed, slot, ms)
 	maxPad, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, true, seed)
-	if err = protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }); err != nil {
-		return 0, err
-	}
-	if !strings.EqualFold(flush, "perChunk") {
-		_ = w.Flush()
-	}
+	_, _, _, _, _, _, _ = maxPad, prefixLen, jc, jmin, jmax, jstyle, flush
 	optsJSON := handshakeOptsJSON(prot, seed, slot, maxPad, ms, true)
 	if err = protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleUDP(), channelID, token, prefixLen, optsJSON, slot); err != nil {
 		return 0, err
@@ -212,12 +239,7 @@ func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOpti
 	}
 	ms = pickMagicSplit(seed, slot, ms)
 	_, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, false, seed)
-	if err := protocol.WriteJunkOrTLSLike(w, jc, jmin, jmax, jstyle, flush, func() { _ = w.Flush() }); err != nil {
-		return err
-	}
-	if !strings.EqualFold(flush, "perChunk") {
-		_ = w.Flush()
-	}
+	_, _, _, _, _, _ = jc, jmin, jmax, jstyle, flush, slot
 	optsJSON := handshakeOptsJSON(prot, seed, slot, 0, ms, false)
 	return protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot)
 }
