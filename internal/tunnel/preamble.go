@@ -102,9 +102,7 @@ func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool, seed 
 	if useSeed {
 		junkCount, junkMin, junkMax = applyMixJunkVariation(junkCount, junkMin, junkMax, mix[:])
 		if strings.TrimSpace(junkStyle) == "" {
-			if mix[9]%8 < 2 {
-				junkStyle = "tls"
-			}
+			junkStyle = ""
 		}
 		if strings.TrimSpace(flushPolicy) == "" {
 			if mix[10]%32 == 0 {
@@ -142,9 +140,9 @@ func applyMixJunkVariation(count, min, max int, mix []byte) (int, int, int) {
 	return count, min, max
 }
 
-func handshakeOptsJSON(prot *config.ProtectionOptions, seed []byte, slot int64, negotiatedUDPMaxPad int, magicSplit string, udpChannel bool) []byte {
-	mask := protocol.TransportTCP
-	if udpChannel {
+func handshakeOptsJSON(prot *config.ProtectionOptions, seed []byte, slot int64, negotiatedUDPMaxPad int, magicSplit string, udpChannel bool, transportMask int) []byte {
+	mask := transportMask
+	if mask == 0 {
 		mask = protocol.TransportTCP
 	}
 	meta := map[string]any{
@@ -205,7 +203,7 @@ func handshakeOptsJSON(prot *config.ProtectionOptions, seed []byte, slot int64, 
 	return b
 }
 
-func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, prot *config.ProtectionOptions, slot int64) (maxPad int, err error) {
+func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, prot *config.ProtectionOptions, slot int64, transportMask int) (maxPad int, err error) {
 	seed := make([]byte, 16)
 	if _, err := rand.Read(seed); err != nil {
 		return 0, err
@@ -216,8 +214,11 @@ func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, 
 	}
 	ms = pickMagicSplit(seed, slot, ms)
 	maxPad, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, true, seed)
+	if transportMask == protocol.TransportQUIC {
+		prefixLen = 0
+	}
 	_, _, _, _, _, _, _ = maxPad, prefixLen, jc, jmin, jmax, jstyle, flush
-	optsJSON := handshakeOptsJSON(prot, seed, slot, maxPad, ms, true)
+	optsJSON := handshakeOptsJSON(prot, seed, slot, maxPad, ms, true, transportMask)
 	if err = protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleUDP(), channelID, token, prefixLen, optsJSON, slot); err != nil {
 		return 0, err
 	}
@@ -225,10 +226,10 @@ func WriteUDPChannelPreambleSlot(w *bufio.Writer, channelID byte, token string, 
 }
 
 func WriteUDPChannelPreamble(w *bufio.Writer, channelID byte, token string, prot *config.ProtectionOptions) (maxPad int, err error) {
-	return WriteUDPChannelPreambleSlot(w, channelID, token, prot, protocol.TimeSlot())
+	return WriteUDPChannelPreambleSlot(w, channelID, token, prot, protocol.TimeSlot(), protocol.TransportTCP)
 }
 
-func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOptions, slot int64) error {
+func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOptions, slot int64, transportMask int) error {
 	seed := make([]byte, 16)
 	if _, err := rand.Read(seed); err != nil {
 		return err
@@ -239,8 +240,11 @@ func tcpRelayPreamble(w *bufio.Writer, token string, prot *config.ProtectionOpti
 	}
 	ms = pickMagicSplit(seed, slot, ms)
 	_, prefixLen, jc, jmin, jmax, jstyle, flush := streamObf(prot, slot, false, seed)
+	if transportMask == protocol.TransportQUIC {
+		prefixLen = 0
+	}
 	_, _, _, _, _, _ = jc, jmin, jmax, jstyle, flush, slot
-	optsJSON := handshakeOptsJSON(prot, seed, slot, 0, ms, false)
+	optsJSON := handshakeOptsJSON(prot, seed, slot, 0, ms, false, transportMask)
 	return protocol.WriteHandshakeWithPrefixAndOptsSlot(w, protocol.RoleTCP(), 0, token, prefixLen, optsJSON, slot)
 }
 

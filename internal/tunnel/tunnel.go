@@ -36,7 +36,7 @@ func Dial(serverAddrs []string, targetIP net.IP, targetPort uint16, token string
 		bufSize := protocol.BufSizeForConn(slot)
 		r := bufio.NewReaderSize(c, bufSize)
 		w := bufio.NewWriterSize(c, bufSize)
-		if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
+		if err := tcpRelayPreamble(w, token, prot, slot, protocol.TransportTCP); err != nil {
 			_ = c.Close()
 			lastErr = err
 			continue
@@ -158,7 +158,7 @@ func dialQUIC(serverAddrs []string, quicServer, quicServerName string, quicSkipV
 	slot := protocol.TimeSlot()
 	w := bufio.NewWriterSize(sconn, protocol.BufSizeForConn(slot))
 	r := bufio.NewReaderSize(sconn, protocol.BufSizeForConn(slot))
-	if err := tcpRelayPreamble(w, token, prot, slot); err != nil {
+	if err := tcpRelayPreamble(w, token, prot, slot, protocol.TransportQUIC); err != nil {
 		_ = sconn.Close()
 		return nil, err
 	}

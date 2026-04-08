@@ -282,18 +282,14 @@ final class QuicServer implements AutoCloseable {
               log.info("[quic-trace] pteravpn handshake read role=" + hs.role() + " ch=" + hs.channelId());
             }
             if (!MessageDigest.isEqual(cfg.token().getBytes(StandardCharsets.UTF_8), hs.token().getBytes(StandardCharsets.UTF_8))) {
-              int legacyIpv6 = Ipv6Detect.hasIPv6() ? 1 : 0;
-              int transportMask = 0;
-              if (cfg.tcpEnabled()) transportMask |= Protocol.TRANSPORT_TCP;
-              if (cfg.quicEnabled()) transportMask |= Protocol.TRANSPORT_QUIC;
-              int featureBits = legacyIpv6 == 1 ? Protocol.FEAT_IPV6 : 0;
-              int tcpPortHint = cfg.listenPorts().isEmpty() ? 0 : cfg.listenPorts().get(0);
-              Protocol.writeServerHelloCaps(out, new Protocol.ServerHelloCaps(
-                  Protocol.CAPS_VERSION, legacyIpv6, transportMask, featureBits,
-                  cfg.quicEnabled() ? cfg.quicListenPort() : 0, tcpPortHint, 0, new byte[0],
-                  QuicServer.getAdvertisedQuicLeafPin()));
+              ConnectionHandler.writeCapability(out, cfg);
               return;
             }
+            ConnectionHandler.validateNegotiation(
+                hs.token(),
+                hr.opts(),
+                Protocol.TRANSPORT_QUIC,
+                ConnectionHandler.REPLAY_WINDOW_SEC_QUIC);
             if (hs.role() == Protocol.ROLE_UDP) {
               keepStreamOpen = true;
             }

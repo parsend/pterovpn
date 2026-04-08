@@ -22,8 +22,9 @@ final class ConnectionHandler implements Runnable {
 
     private static final Logger log = Log.logger(ConnectionHandler.class);
     private static final int HANDSHAKE_TIMEOUT_MS = 10_000;
-    private static final long HANDSHAKE_SKEW_SEC = 30;
-    private static final long REPLAY_WINDOW_SEC = 90;
+    static final long HANDSHAKE_SKEW_SEC = 30;
+    static final long REPLAY_WINDOW_SEC_TCP = 90;
+    static final long REPLAY_WINDOW_SEC_QUIC = 120;
     private static final SecureRandom HELLO_RND = new SecureRandom();
     private static final Map<String, Long> NONCE_SEEN = new ConcurrentHashMap<>();
     
@@ -70,7 +71,7 @@ final class ConnectionHandler implements Runnable {
                 sendCapability(rawOut);
                 throw new IOException("bad token");
             }
-            validateNegotiation(hs, hr.opts());
+            validateNegotiation(hs.token(), hr.opts(), Protocol.TRANSPORT_TCP, REPLAY_WINDOW_SEC_TCP);
             OutputStream out = xor.wrapOutput(rawOut);
             s.setSoTimeout(0);
             var session = new SessionHandler(cfg, udp, String.valueOf(s.getRemoteSocketAddress()), () -> {
@@ -98,7 +99,7 @@ final class ConnectionHandler implements Runnable {
         }
     }
 
-    private void sendCapability(OutputStream rawOut) {
+    static void writeCapability(OutputStream rawOut, Config cfg) {
         if (rawOut == null) return;
         try {
             int legacyIpv6 = Ipv6Detect.hasIPv6() ? 1 : 0;
@@ -123,7 +124,11 @@ final class ConnectionHandler implements Runnable {
         } catch (Throwable ignored) {}
     }
 
-    private static void validateNegotiation(Protocol.Handshake hs, java.util.Optional<Protocol.ClientOptions> opts) throws IOException {
+    private void sendCapability(OutputStream rawOut) {
+        writeCapability(rawOut, cfg);
+    }
+
+    static void validateNegotiation(String token, java.util.Optional<Protocol.ClientOptions> opts, int requiredTransportMask, long replayWindowSec) throws IOException {
         if (opts.isEmpty()) {
             throw new IOException("missing handshake options");
         }
@@ -131,31 +136,34 @@ final class ConnectionHandler implements Runnable {
         if (c.capsVersion() != Protocol.CAPS_VERSION) {
             throw new IOException("caps version mismatch");
         }
-        if ((c.transportMask() & Protocol.TRANSPORT_TCP) == 0) {
+        if ((c.transportMask() & requiredTransportMask) == 0) {
             throw new IOException("transport mask mismatch");
+        }
+        if ((c.featureBits() & ~Protocol.FEAT_IPV6) != 0) {
+            throw new IOException("feature bits mismatch");
         }
         long now = System.currentTimeMillis() / 1000L;
         long ts = c.clientTsSec();
-        if (ts <= 0 || Math.abs(now - ts) > (HANDSHAKE_SKEW_SEC + REPLAY_WINDOW_SEC)) {
+        if (ts <= 0 || Math.abs(now - ts) > (HANDSHAKE_SKEW_SEC + replayWindowSec)) {
             throw new IOException("handshake timestamp out of window");
         }
         byte[] nonce = c.clientNonce();
         if (nonce == null || nonce.length < 8) {
             throw new IOException("missing handshake nonce");
         }
-        String nonceKey = hs.token() + ":" + Base64.getEncoder().encodeToString(nonce);
-        cleanupNonceMap(now);
+        String nonceKey = token + ":" + requiredTransportMask + ":" + Base64.getEncoder().encodeToString(nonce);
+        cleanupNonceMap(now, replayWindowSec);
         Long prev = NONCE_SEEN.putIfAbsent(nonceKey, now);
-        if (prev != null && now-prev <= REPLAY_WINDOW_SEC) {
+        if (prev != null && now-prev <= replayWindowSec) {
             throw new IOException("replay detected");
         }
     }
 
-    private static void cleanupNonceMap(long nowSec) {
+    private static void cleanupNonceMap(long nowSec, long replayWindowSec) {
         Iterator<Map.Entry<String, Long>> it = NONCE_SEEN.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<String, Long> e = it.next();
-            if (nowSec - e.getValue() > REPLAY_WINDOW_SEC) {
+            if (nowSec - e.getValue() > replayWindowSec) {
                 it.remove();
             }
         }

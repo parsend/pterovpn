@@ -157,9 +157,9 @@ type udpAssoc struct {
 }
 
 type udpMux struct {
-	chansMu sync.Mutex
-	chans   []*udpChan
-	assoc   sync.Map
+	chansMu   sync.Mutex
+	chans     []*udpChan
+	assoc     sync.Map
 	quicConn  *tunnel.QUICConn
 	quicClose func()
 }
@@ -296,7 +296,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			stop: make(chan struct{}),
 			cb:   cb,
 		}
-		maxPad, err := tunnel.WriteUDPChannelPreambleSlot(uc.w, id, token, prot, slot)
+		maxPad, err := tunnel.WriteUDPChannelPreambleSlot(uc.w, id, token, prot, slot, protocol.TransportTCP)
 		if err != nil {
 			_ = c.Close()
 			last = err

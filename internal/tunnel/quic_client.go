@@ -292,7 +292,7 @@ func openUDPChannelOnQUICStream(conn *quic.Conn, stream *quic.Stream, channelID 
 	bufSize := protocol.BufSizeForConn(slot)
 	r := bufio.NewReaderSize(sconn, bufSize)
 	w := bufio.NewWriterSize(sconn, bufSize)
-	maxPad, err := WriteUDPChannelPreambleSlot(w, channelID, token, prot, slot)
+	maxPad, err := WriteUDPChannelPreambleSlot(w, channelID, token, prot, slot, protocol.TransportQUIC)
 	if err != nil {
 		_ = sconn.Close()
 		return nil, nil, nil, 0, err
