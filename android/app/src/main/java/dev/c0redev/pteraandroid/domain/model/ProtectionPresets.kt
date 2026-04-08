@@ -3,7 +3,7 @@ package dev.c0redev.pteraandroid.domain.model
 object ProtectionPresets {
 
     fun balanced(): ProtectionOptions = ProtectionOptions(
-        obfuscation = "default",
+        obfuscation = "enhanced",
         junkCount = 4,
         junkMin = 64,
         junkMax = 512,
@@ -13,8 +13,8 @@ object ProtectionPresets {
         padS4 = 24,
         preCheck = false,
         magicSplit = "1,2,2",
-        junkStyle = "default",
-        flushPolicy = "once",
+        junkStyle = "random",
+        flushPolicy = "perChunk",
     )
 
     fun strict(): ProtectionOptions = ProtectionOptions(
@@ -28,8 +28,8 @@ object ProtectionPresets {
         padS4 = 48,
         preCheck = false,
         magicSplit = "2,2,1",
-        junkStyle = "tls",
-        flushPolicy = "once",
+        junkStyle = "random",
+        flushPolicy = "perChunk",
     )
 
     fun suggestFromMetrics(records: List<SessionRecord>): ProtectionOptions {
