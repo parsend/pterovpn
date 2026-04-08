@@ -12,8 +12,8 @@ object ProtectionPresets {
         padS3 = 4,
         padS4 = 24,
         preCheck = false,
-        magicSplit = "1,2,2",
-        junkStyle = "default",
+        magicSplit = null,
+        junkStyle = "random",
         flushPolicy = "once",
     )
 
@@ -27,7 +27,7 @@ object ProtectionPresets {
         padS3 = 12,
         padS4 = 48,
         preCheck = false,
-        magicSplit = "2,2,1",
+        magicSplit = null,
         junkStyle = "tls",
         flushPolicy = "once",
     )

@@ -21,7 +21,7 @@ data class ProtectionOptions(
 ) {
     fun toJson(): JSONObject {
         val j = JSONObject()
-        j.put("obfuscation", obfuscation?.takeIf { it.isNotBlank() } ?: "default")
+        obfuscation?.let { j.put("obfuscation", it) }
         if (junkCount != 0) j.put("junkCount", junkCount)
         if (junkMin != 0) j.put("junkMin", junkMin)
         if (junkMax != 0) j.put("junkMax", junkMax)
@@ -30,9 +30,9 @@ data class ProtectionOptions(
         if (padS3 != 0) j.put("padS3", padS3)
         if (padS4 != 0) j.put("padS4", padS4)
         j.put("preCheck", preCheck)
-        j.put("magicSplit", magicSplit?.takeIf { it.isNotBlank() } ?: "1,2,2")
-        j.put("junkStyle", junkStyle?.takeIf { it.isNotBlank() } ?: "default")
-        j.put("flushPolicy", flushPolicy?.takeIf { it.isNotBlank() } ?: "once")
+        magicSplit?.let { j.put("magicSplit", it) }
+        junkStyle?.let { j.put("junkStyle", it) }
+        flushPolicy?.let { j.put("flushPolicy", it) }
         if (obfAutoRotate) j.put("obfAutoRotate", true)
         if (obfRotateEveryM > 0) j.put("obfRotateEveryM", obfRotateEveryM)
         return j
