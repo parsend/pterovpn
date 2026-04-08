@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -162,6 +163,12 @@ type udpMux struct {
 	assoc     sync.Map
 	quicConn  *tunnel.QUICConn
 	quicClose func()
+
+	addrs      []string
+	token      string
+	transport  string
+	quicServer string
+	protBase   *config.ProtectionOptions
 }
 
 func (m *udpMux) SharedQUICConn() *tunnel.QUICConn {
@@ -170,7 +177,12 @@ func (m *udpMux) SharedQUICConn() *tunnel.QUICConn {
 
 func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptions, transport, quicServer, quicServerName string, quicSkipVerify bool, quicCertPinSHA256 string, quicTLSRoots *x509.CertPool) (*udpMux, error) {
 	m := &udpMux{
-		chans: make([]*udpChan, n),
+		chans:      make([]*udpChan, n),
+		addrs:      addrs,
+		token:      token,
+		transport:  transport,
+		quicServer: quicServer,
+		protBase:   prot,
 	}
 	if tunnel.UsesQUICTransport(transport, quicServer) {
 		closeConn, sharedConn, streams, err := tunnel.DialUDPMuxQUIC(addrs, quicServer, quicServerName, quicSkipVerify, quicCertPinSHA256, quicTLSRoots, n, token, prot)
@@ -190,6 +202,7 @@ func newUDPMux(addrs []string, token string, n int, prot *config.ProtectionOptio
 				stop:   make(chan struct{}),
 				cb:     m.dispatch,
 			}
+			uc.alive.Store(true)
 			clientlog.Traffic("vpn: udp ch %d  [%s]  %s", i, tunnel.PteravpnTunnelTag(transport, quicServer), pteravpnTunnelCfg(transport, quicServer))
 			go uc.readLoop()
 			clientlog.OK("vpn: udp channel %d connected", i)
@@ -231,25 +244,64 @@ func (m *udpMux) unregister(k udpAssocKey) {
 	m.assoc.Delete(k)
 }
 
-func (m *udpMux) pick(k udpAssocKey) *udpChan {
-	if len(m.chans) == 0 {
+func (m *udpMux) pickAlive(k udpAssocKey) *udpChan {
+	n := len(m.chans)
+	if n == 0 {
 		return nil
 	}
 	h := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%d", k.SrcPort, k.DstIP, k.DstPort)))
-	idx := int(h[0]) % len(m.chans)
-	return m.chans[idx]
+	start := int(h[0]) % n
+	for i := 0; i < n; i++ {
+		ch := m.chans[(start+i)%n]
+		if ch != nil && ch.alive.Load() {
+			return ch
+		}
+	}
+	return nil
+}
+
+func isRetriableUDPMuxErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "broken pipe") || strings.Contains(s, "connection reset by peer")
 }
 
 func (m *udpMux) send(k udpAssocKey, payload []byte) error {
-	m.chansMu.Lock()
-	ch := m.pick(k)
-	m.chansMu.Unlock()
-	if ch == nil {
-		return errors.New("udp mux: no channel")
-	}
 	ip := net.ParseIP(k.DstIP)
 	f := protocol.UDPFrame{SrcPort: k.SrcPort, DstIP: ip, DstPort: k.DstPort, Payload: payload}
-	return ch.Send(f)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		m.chansMu.Lock()
+		ch := m.pickAlive(k)
+		m.chansMu.Unlock()
+		if ch == nil {
+			if m.quicConn == nil && attempt == 0 {
+				if err := m.remuxTCPChannels(m.addrs, m.token, m.transport, m.quicServer, config.EffectiveProtection(m.protBase)); err != nil {
+					return err
+				}
+				continue
+			}
+			return errors.New("udp mux: no channel")
+		}
+		err := ch.Send(f)
+		if err == nil {
+			return nil
+		}
+		if m.quicConn != nil || !isRetriableUDPMuxErr(err) {
+			return err
+		}
+		if attempt == 0 {
+			_ = m.remuxTCPChannels(m.addrs, m.token, m.transport, m.quicServer, config.EffectiveProtection(m.protBase))
+			continue
+		}
+		return err
+	}
+	return errors.New("udp mux: send failed")
 }
 
 func (m *udpMux) dispatch(f protocol.UDPFrame) {
@@ -274,6 +326,7 @@ type udpChan struct {
 	stopOnce sync.Once
 	stop     chan struct{}
 	cb       func(protocol.UDPFrame)
+	alive    atomic.Bool
 }
 
 func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame), base *config.ProtectionOptions, transport, quicServer string) (*udpChan, error) {
@@ -303,6 +356,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 			continue
 		}
 		uc.maxPad = maxPad
+		uc.alive.Store(true)
 		clientlog.Traffic("vpn: udp ch %d  [%s]  server=%s  %s", id, tunnel.PteravpnTunnelTag(transport, quicServer), a, pteravpnTunnelCfg(transport, quicServer))
 		go uc.readLoop()
 		return uc, nil
@@ -314,6 +368,7 @@ func newUDPChan(id byte, addrs []string, token string, cb func(protocol.UDPFrame
 }
 
 func (c *udpChan) Close() error {
+	c.alive.Store(false)
 	c.stopOnce.Do(func() { close(c.stop) })
 	return c.conn.Close()
 }
@@ -325,6 +380,7 @@ func (c *udpChan) Send(f protocol.UDPFrame) error {
 }
 
 func (c *udpChan) readLoop() {
+	defer c.alive.Store(false)
 	for {
 		select {
 		case <-c.stop:
