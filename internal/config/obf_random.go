@@ -47,32 +47,19 @@ func RandomizeObfuscation(in ProtectionOptions) ProtectionOptions {
 	out.JunkMin = clampInt(out.JunkMin, junkMinLo, junkMinHi)
 	out.JunkMax = clampInt(out.JunkMax, out.JunkMin+64, junkMaxHi)
 
-	out.PadS1 = int(u8(5)) % (padMax + 1)
-	out.PadS2 = int(u8(6)) % (padMax + 1)
-	out.PadS3 = int(u8(7)) % (padMax + 1)
-	out.PadS4 = int(u8(8)) % (padMax + 1)
+	out.PadS1 = 1 + int(u8(5))%padMax
+	out.PadS2 = 1 + int(u8(6))%padMax
+	out.PadS3 = 1 + int(u8(7))%padMax
+	out.PadS4 = 1 + int(u8(8))%padMax
 
-	if u8(9)%2 == 0 {
-		out.Obfuscation = "default"
-	} else {
-		out.Obfuscation = "enhanced"
-	}
+	out.Obfuscation = "enhanced"
+	out.JunkStyle = "random"
+	out.FlushPolicy = "perChunk"
 
 	patterns := []string{
 		"1,1,3", "1,2,2", "2,1,2", "2,2,1", "3,1,1", "1,4", "4,1", "5",
 	}
 	out.MagicSplit = patterns[int(u8(10))%len(patterns)]
-
-	if u8(11)%2 == 0 {
-		out.JunkStyle = "tls"
-	} else {
-		out.JunkStyle = "default"
-	}
-	if u8(12)%2 == 0 {
-		out.FlushPolicy = "perChunk"
-	} else {
-		out.FlushPolicy = "once"
-	}
 	return out
 }
 
@@ -145,9 +132,6 @@ func SanitizeObfRotateFields(p *ProtectionOptions) {
 	}
 	if p.ObfRotateEveryM > 24*60 {
 		p.ObfRotateEveryM = 24 * 60
-	}
-	if strings.TrimSpace(p.JunkStyle) == "random" {
-		p.JunkStyle = ""
 	}
 	if strings.TrimSpace(p.FlushPolicy) == "once" {
 		p.FlushPolicy = ""

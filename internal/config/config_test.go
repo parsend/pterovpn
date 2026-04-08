@@ -98,6 +98,20 @@ func TestParseConnection(t *testing.T) {
 	}
 }
 
+func TestRandomizeObfuscationFixedFields(t *testing.T) {
+	p := RandomizeObfuscation(ProtectionOptions{})
+	if p.Obfuscation != "enhanced" || p.JunkStyle != "random" || p.FlushPolicy != "perChunk" {
+		t.Fatalf("fixed obf fields: got obfuscation=%q junkStyle=%q flushPolicy=%q", p.Obfuscation, p.JunkStyle, p.FlushPolicy)
+	}
+	if p.PadS1 < 1 || p.PadS1 > padMax || p.PadS2 < 1 || p.PadS2 > padMax ||
+		p.PadS3 < 1 || p.PadS3 > padMax || p.PadS4 < 1 || p.PadS4 > padMax {
+		t.Fatalf("pads must be in 1..%d: %+v", padMax, p)
+	}
+	if p.MagicSplit == "" {
+		t.Fatal("magicSplit empty")
+	}
+}
+
 func TestProtection(t *testing.T) {
 	dir := t.TempDir()
 	os.Setenv("XDG_CONFIG_HOME", dir)
