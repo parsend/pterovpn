@@ -100,12 +100,12 @@ func streamObf(prot *config.ProtectionOptions, slot int64, udpMaxPad bool, seed 
 	if useSeed {
 		junkCount, junkMin, junkMax = applyMixJunkVariation(junkCount, junkMin, junkMax, mix[:])
 		if strings.TrimSpace(junkStyle) == "" {
-			if mix[9]%2 == 0 {
+			if mix[9]%8 < 2 {
 				junkStyle = "tls"
 			}
 		}
 		if strings.TrimSpace(flushPolicy) == "" {
-			if mix[10]%4 == 0 {
+			if mix[10]%32 == 0 {
 				flushPolicy = "perChunk"
 			}
 		}

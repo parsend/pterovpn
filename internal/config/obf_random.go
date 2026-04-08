@@ -2,14 +2,9 @@ package config
 
 import (
 	crand "crypto/rand"
+	"encoding/binary"
 	"strings"
 )
-
-func obfRandByte() byte {
-	var b [1]byte
-	_, _ = crand.Read(b[:])
-	return b[0]
-}
 
 func clampInt(v, lo, hi int) int {
 	if v < lo {
@@ -21,43 +16,62 @@ func clampInt(v, lo, hi int) int {
 	return v
 }
 
+const (
+	junkMinLo = 64
+	junkMinHi = 1024
+	junkMaxHi = 1024
+	padMax    = 64
+)
+
 func RandomizeObfuscation(in ProtectionOptions) ProtectionOptions {
 	out := in
 	out.ObfSeed = ""
 
-	jc := 2 + int(obfRandByte()%11)
-	out.JunkCount = clampInt(jc, 1, 12)
+	var rb [32]byte
+	_, _ = crand.Read(rb[:])
+	u8 := func(i int) byte { return rb[i%32] }
+	u16 := func(i int) uint16 {
+		i = i % 31
+		return binary.LittleEndian.Uint16(rb[i : i+2])
+	}
 
-	jmin := 64 + int(obfRandByte()%32)*8
-	out.JunkMin = clampInt(jmin, 64, 512)
+	out.JunkCount = 1 + int(u8(0))%12
 
-	span := 256 + int(obfRandByte())*8
-	jmax := out.JunkMin + span
-	out.JunkMax = clampInt(jmax, out.JunkMin+64, 2048)
+	out.JunkMin = junkMinLo + int(u16(1))%(junkMinHi-junkMinLo+1)
+	span := junkMaxHi - out.JunkMin - 64 + 1
+	if span < 1 {
+		out.JunkMax = junkMaxHi
+	} else {
+		out.JunkMax = out.JunkMin + 64 + int(u16(3))%span
+	}
+	out.JunkMin = clampInt(out.JunkMin, junkMinLo, junkMinHi)
+	out.JunkMax = clampInt(out.JunkMax, out.JunkMin+64, junkMaxHi)
 
-	out.PadS1 = int(obfRandByte() % 49)
-	out.PadS2 = int(obfRandByte() % 49)
-	out.PadS3 = int(obfRandByte() % 49)
-	out.PadS4 = 16 + int(obfRandByte()%49)
+	out.PadS1 = int(u8(5)) % (padMax + 1)
+	out.PadS2 = int(u8(6)) % (padMax + 1)
+	out.PadS3 = int(u8(7)) % (padMax + 1)
+	out.PadS4 = int(u8(8)) % (padMax + 1)
 
-	if obfRandByte()%2 == 0 {
-		out.Obfuscation = ""
+	if u8(9)%2 == 0 {
+		out.Obfuscation = "default"
 	} else {
 		out.Obfuscation = "enhanced"
 	}
 
-	patterns := []string{"", "1,1,3", "1,2,2", "2,2,1", "3,1,1", "1,4"}
-	out.MagicSplit = patterns[int(obfRandByte())%len(patterns)]
+	patterns := []string{
+		"1,1,3", "1,2,2", "2,1,2", "2,2,1", "3,1,1", "1,4", "4,1", "5",
+	}
+	out.MagicSplit = patterns[int(u8(10))%len(patterns)]
 
-	if obfRandByte()%2 == 0 {
+	if u8(11)%2 == 0 {
 		out.JunkStyle = "tls"
 	} else {
-		out.JunkStyle = ""
+		out.JunkStyle = "default"
 	}
-	if obfRandByte()%3 == 0 {
+	if u8(12)%2 == 0 {
 		out.FlushPolicy = "perChunk"
 	} else {
-		out.FlushPolicy = ""
+		out.FlushPolicy = "once"
 	}
 	return out
 }
