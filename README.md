@@ -1,5 +1,9 @@
 # ptera vpn
 
+# ПРОЕКТ ЗАКРЫТ, ОБНОВЛЕНИЯ НЕ БУДЕТ. 
+# НОВЫЙ ПРОЕКТ --> https://github.com/ORG-FE/volter
+
+
 Android-клиент в `android/`: c0redev (maxkrya).
 
 Все сделал - c0redev (maxkrya), tg: tcptransit.
